@@ -2,7 +2,7 @@
 #  Flatten & Merge PDFs - PowerShell + iTextSharp
 #  Drop run.bat and this .ps1 into a folder with your PDFs,
 #  double-click run.bat, and get merged.pdf out.
-#  No installs. Downloads required DLLs on first run (~3 MB).
+#  No installs. Downloads required DLL on first run (~2 MB).
 # ============================================================
 
 $ErrorActionPreference = "Stop"
@@ -44,28 +44,22 @@ foreach ($f in $pdfFiles) {
 }
 Write-Host ""
 
-# --- Step 2: Download iTextSharp + BouncyCastle if needed ---
-# iTextSharp 5.5.13.3 requires BouncyCastle.Crypto.dll as a separate
-# dependency. Both must be present or iTextSharp fails to load.
+# --- Step 2: Download iTextSharp 5.5.9 if needed ---
+# Version 5.5.9 has BouncyCastle compiled in - no separate DLL needed.
 
-$libDir    = Join-Path $scriptDir ".pdftools"
-$dllPath   = Join-Path $libDir "itextsharp.dll"
-$bcDllPath = Join-Path $libDir "BouncyCastle.Crypto.dll"
+$libDir  = Join-Path $scriptDir ".pdftools"
+$dllPath = Join-Path $libDir "itextsharp.dll"
 
-$needsDownload = (-not (Test-Path $dllPath)) -or (-not (Test-Path $bcDllPath))
-
-if ($needsDownload) {
-    Write-Host "First run: downloading PDF libraries (~3 MB, one-time)..." -ForegroundColor Gray
+if (-not (Test-Path $dllPath)) {
+    Write-Host "First run: downloading iTextSharp (~2 MB, one-time)..." -ForegroundColor Gray
     New-Item -ItemType Directory -Path $libDir -Force | Out-Null
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-    # -- iTextSharp --
-    Write-Host "  Fetching iTextSharp..." -NoNewline -ForegroundColor Gray
     try {
         $zipPath    = Join-Path $env:TEMP "itextsharp_pkg.zip"
         $extractDir = Join-Path $env:TEMP "itextsharp_extract"
 
-        Invoke-WebRequest -Uri "https://www.nuget.org/api/v2/package/iTextSharp/5.5.13.3" `
+        Invoke-WebRequest -Uri "https://www.nuget.org/api/v2/package/iTextSharp/5.5.9" `
             -OutFile $zipPath -UseBasicParsing
         if (Test-Path $extractDir) { Remove-Item $extractDir -Recurse -Force }
         Expand-Archive -Path $zipPath -DestinationPath $extractDir -Force
@@ -82,65 +76,28 @@ if ($needsDownload) {
         }
 
         if (-not $found) { throw "itextsharp.dll not found in package" }
+
         Copy-Item $found.FullName $dllPath -Force
         Remove-Item $zipPath    -Force -ErrorAction SilentlyContinue
         Remove-Item $extractDir -Recurse -Force -ErrorAction SilentlyContinue
-        Write-Host " OK" -ForegroundColor Green
+
+        Write-Host "iTextSharp ready." -ForegroundColor Green
+        Write-Host ""
     }
     catch {
-        Write-Host " FAILED: $_" -ForegroundColor Red
+        Write-Host "ERROR: $_" -ForegroundColor Red
         Remove-Item $libDir -Recurse -Force -ErrorAction SilentlyContinue
         Read-Host "Press Enter to exit"
         exit 1
     }
-
-    # -- BouncyCastle (required by iTextSharp) --
-    Write-Host "  Fetching BouncyCastle..." -NoNewline -ForegroundColor Gray
-    try {
-        $zipPath    = Join-Path $env:TEMP "bc_pkg.zip"
-        $extractDir = Join-Path $env:TEMP "bc_extract"
-
-        Invoke-WebRequest -Uri "https://www.nuget.org/api/v2/package/BouncyCastle.Crypto/1.9.0" `
-            -OutFile $zipPath -UseBasicParsing
-        if (Test-Path $extractDir) { Remove-Item $extractDir -Recurse -Force }
-        Expand-Archive -Path $zipPath -DestinationPath $extractDir -Force
-
-        $found = Get-ChildItem -Path $extractDir -Filter "BouncyCastle.Crypto.dll" -Recurse |
-            Where-Object { $_.FullName -notmatch "netstandard|netcore|net5|net6|net7|net8|net9" } |
-            Where-Object { $_.FullName -match "net4" } |
-            Select-Object -First 1
-
-        if (-not $found) {
-            $found = Get-ChildItem -Path $extractDir -Filter "BouncyCastle.Crypto.dll" -Recurse |
-                Where-Object { $_.FullName -notmatch "netstandard|netcore|net5|net6|net7|net8|net9" } |
-                Select-Object -First 1
-        }
-
-        if (-not $found) { throw "BouncyCastle.Crypto.dll not found in package" }
-        Copy-Item $found.FullName $bcDllPath -Force
-        Remove-Item $zipPath    -Force -ErrorAction SilentlyContinue
-        Remove-Item $extractDir -Recurse -Force -ErrorAction SilentlyContinue
-        Write-Host " OK" -ForegroundColor Green
-    }
-    catch {
-        Write-Host " FAILED: $_" -ForegroundColor Red
-        Remove-Item $libDir -Recurse -Force -ErrorAction SilentlyContinue
-        Read-Host "Press Enter to exit"
-        exit 1
-    }
-
-    Write-Host "Libraries ready." -ForegroundColor Green
-    Write-Host ""
 }
 
-# BouncyCastle must be loaded before iTextSharp
 try {
-    Add-Type -Path $bcDllPath
     Add-Type -Path $dllPath
 }
 catch {
-    Write-Host "Failed to load PDF libraries: $_" -ForegroundColor Red
-    Write-Host "Deleting cached files - re-run to download again." -ForegroundColor Yellow
+    Write-Host "Failed to load iTextSharp: $_" -ForegroundColor Red
+    Write-Host "Deleting cached file - re-run to download again." -ForegroundColor Yellow
     Remove-Item $libDir -Recurse -Force -ErrorAction SilentlyContinue
     Read-Host "Press Enter to exit"
     exit 1
