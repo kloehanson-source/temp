@@ -2,7 +2,7 @@
 #  Flatten & Merge PDFs - PowerShell + iTextSharp
 #  Drop run.bat and this .ps1 into a folder with your PDFs,
 #  double-click run.bat, and get merged.pdf out.
-#  No installs. Downloads iTextSharp DLL on first run (~2 MB).
+#  No installs. Downloads required DLLs on first run (~3 MB).
 # ============================================================
 
 $ErrorActionPreference = "Stop"
@@ -44,72 +44,111 @@ foreach ($f in $pdfFiles) {
 }
 Write-Host ""
 
-# --- Step 2: Get iTextSharp if needed ---
-$libDir  = Join-Path $scriptDir ".pdftools"
-$dllPath = Join-Path $libDir "itextsharp.dll"
+# --- Step 2: Download iTextSharp + BouncyCastle if needed ---
+# iTextSharp 5.5.13.3 requires BouncyCastle.Crypto.dll as a separate
+# dependency. Both must be present or iTextSharp fails to load.
 
-if (-not (Test-Path $dllPath)) {
-    Write-Host "First run: downloading iTextSharp (~2 MB, one-time)..." -ForegroundColor Gray
+$libDir    = Join-Path $scriptDir ".pdftools"
+$dllPath   = Join-Path $libDir "itextsharp.dll"
+$bcDllPath = Join-Path $libDir "BouncyCastle.Crypto.dll"
 
-    $nugetUrl   = "https://www.nuget.org/api/v2/package/iTextSharp/5.5.13.3"
-    $zipPath    = Join-Path $env:TEMP "itextsharp_pkg.zip"
-    $extractDir = Join-Path $env:TEMP "itextsharp_extract"
+$needsDownload = (-not (Test-Path $dllPath)) -or (-not (Test-Path $bcDllPath))
 
+if ($needsDownload) {
+    Write-Host "First run: downloading PDF libraries (~3 MB, one-time)..." -ForegroundColor Gray
+    New-Item -ItemType Directory -Path $libDir -Force | Out-Null
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
+    # -- iTextSharp --
+    Write-Host "  Fetching iTextSharp..." -NoNewline -ForegroundColor Gray
     try {
-        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-        Invoke-WebRequest -Uri $nugetUrl -OutFile $zipPath -UseBasicParsing
+        $zipPath    = Join-Path $env:TEMP "itextsharp_pkg.zip"
+        $extractDir = Join-Path $env:TEMP "itextsharp_extract"
 
+        Invoke-WebRequest -Uri "https://www.nuget.org/api/v2/package/iTextSharp/5.5.13.3" `
+            -OutFile $zipPath -UseBasicParsing
         if (Test-Path $extractDir) { Remove-Item $extractDir -Recurse -Force }
         Expand-Archive -Path $zipPath -DestinationPath $extractDir -Force
 
-        # Windows PowerShell needs the net40 build - netstandard/netcore will not load
-        $sourceDll = Get-ChildItem -Path $extractDir -Filter "itextsharp.dll" -Recurse |
+        $found = Get-ChildItem -Path $extractDir -Filter "itextsharp.dll" -Recurse |
             Where-Object { $_.FullName -notmatch "netstandard|netcore|net5|net6|net7|net8|net9" } |
             Where-Object { $_.FullName -match "net4" } |
             Select-Object -First 1
 
-        if (-not $sourceDll) {
-            # Fallback: anything that is not netstandard/netcore
-            $sourceDll = Get-ChildItem -Path $extractDir -Filter "itextsharp.dll" -Recurse |
+        if (-not $found) {
+            $found = Get-ChildItem -Path $extractDir -Filter "itextsharp.dll" -Recurse |
                 Where-Object { $_.FullName -notmatch "netstandard|netcore|net5|net6|net7|net8|net9" } |
                 Select-Object -First 1
         }
 
-        if (-not $sourceDll) { throw "itextsharp.dll not found in NuGet package" }
-
-        Write-Host "  Selected: $($sourceDll.FullName)" -ForegroundColor Gray
-
-        New-Item -ItemType Directory -Path $libDir -Force | Out-Null
-        Copy-Item $sourceDll.FullName $dllPath -Force
-
+        if (-not $found) { throw "itextsharp.dll not found in package" }
+        Copy-Item $found.FullName $dllPath -Force
         Remove-Item $zipPath    -Force -ErrorAction SilentlyContinue
         Remove-Item $extractDir -Recurse -Force -ErrorAction SilentlyContinue
-
-        Write-Host "iTextSharp ready." -ForegroundColor Green
+        Write-Host " OK" -ForegroundColor Green
     }
     catch {
-        Write-Host "ERROR downloading iTextSharp: $_" -ForegroundColor Red
-        Write-Host ""
-        Write-Host "Manual fix: download itextsharp.dll and place it in:" -ForegroundColor Yellow
-        Write-Host "  $libDir" -ForegroundColor Yellow
+        Write-Host " FAILED: $_" -ForegroundColor Red
+        Remove-Item $libDir -Recurse -Force -ErrorAction SilentlyContinue
         Read-Host "Press Enter to exit"
-        exit
+        exit 1
     }
+
+    # -- BouncyCastle (required by iTextSharp) --
+    Write-Host "  Fetching BouncyCastle..." -NoNewline -ForegroundColor Gray
+    try {
+        $zipPath    = Join-Path $env:TEMP "bc_pkg.zip"
+        $extractDir = Join-Path $env:TEMP "bc_extract"
+
+        Invoke-WebRequest -Uri "https://www.nuget.org/api/v2/package/BouncyCastle.Crypto/1.9.0" `
+            -OutFile $zipPath -UseBasicParsing
+        if (Test-Path $extractDir) { Remove-Item $extractDir -Recurse -Force }
+        Expand-Archive -Path $zipPath -DestinationPath $extractDir -Force
+
+        $found = Get-ChildItem -Path $extractDir -Filter "BouncyCastle.Crypto.dll" -Recurse |
+            Where-Object { $_.FullName -notmatch "netstandard|netcore|net5|net6|net7|net8|net9" } |
+            Where-Object { $_.FullName -match "net4" } |
+            Select-Object -First 1
+
+        if (-not $found) {
+            $found = Get-ChildItem -Path $extractDir -Filter "BouncyCastle.Crypto.dll" -Recurse |
+                Where-Object { $_.FullName -notmatch "netstandard|netcore|net5|net6|net7|net8|net9" } |
+                Select-Object -First 1
+        }
+
+        if (-not $found) { throw "BouncyCastle.Crypto.dll not found in package" }
+        Copy-Item $found.FullName $bcDllPath -Force
+        Remove-Item $zipPath    -Force -ErrorAction SilentlyContinue
+        Remove-Item $extractDir -Recurse -Force -ErrorAction SilentlyContinue
+        Write-Host " OK" -ForegroundColor Green
+    }
+    catch {
+        Write-Host " FAILED: $_" -ForegroundColor Red
+        Remove-Item $libDir -Recurse -Force -ErrorAction SilentlyContinue
+        Read-Host "Press Enter to exit"
+        exit 1
+    }
+
+    Write-Host "Libraries ready." -ForegroundColor Green
+    Write-Host ""
 }
 
-# If the cached DLL is the wrong build it will fail here - delete and re-run to fix
+# BouncyCastle must be loaded before iTextSharp
 try {
+    Add-Type -Path $bcDllPath
     Add-Type -Path $dllPath
-} catch {
-    Write-Host "Failed to load iTextSharp DLL (wrong build cached). Deleting and re-run to fix." -ForegroundColor Red
+}
+catch {
+    Write-Host "Failed to load PDF libraries: $_" -ForegroundColor Red
+    Write-Host "Deleting cached files - re-run to download again." -ForegroundColor Yellow
     Remove-Item $libDir -Recurse -Force -ErrorAction SilentlyContinue
     Read-Host "Press Enter to exit"
     exit 1
 }
 
 # --- Step 3: Flatten each PDF into a temp file ---
-# iTextSharp's PdfStamper.FormFlattening renders field values as static
-# page content, so no interactive fields survive to conflict on merge.
+# PdfStamper.FormFlattening renders field values as static page content
+# so no interactive fields survive to conflict on merge.
 
 $tempDir = Join-Path $scriptDir ".pdftemp"
 New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
@@ -121,15 +160,15 @@ foreach ($pdfFile in $pdfFiles) {
     $tempPath = Join-Path $tempDir $pdfFile.Name
 
     try {
-        $reader  = New-Object iTextSharp.text.pdf.PdfReader($pdfFile.FullName)
+        $reader    = New-Object iTextSharp.text.pdf.PdfReader($pdfFile.FullName)
         $outStream = [System.IO.File]::Create($tempPath)
-        $stamper = New-Object iTextSharp.text.pdf.PdfStamper($reader, $outStream)
+        $stamper   = New-Object iTextSharp.text.pdf.PdfStamper($reader, $outStream)
 
-        $stamper.FormFlattening     = $true   # bakes AcroForm field values into page
-        $stamper.FreeTextFlattening = $true   # bakes free-text annotations too
+        $stamper.FormFlattening     = $true
+        $stamper.FreeTextFlattening = $true
 
-        $pageCount = $reader.NumberOfPages    # read before closing
-        $stamper.Close()   # also closes $outStream
+        $pageCount = $reader.NumberOfPages
+        $stamper.Close()
         $reader.Close()
 
         $tempFiles.Add($tempPath)
@@ -160,7 +199,7 @@ $totalPages = 0
 foreach ($tempFile in $tempFiles) {
     try {
         $reader = New-Object iTextSharp.text.pdf.PdfReader($tempFile)
-        $pages  = $reader.NumberOfPages       # read before closing
+        $pages  = $reader.NumberOfPages
         for ($p = 1; $p -le $pages; $p++) {
             $copy.AddPage($copy.GetImportedPage($reader, $p))
         }
