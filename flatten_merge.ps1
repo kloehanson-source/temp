@@ -1,5 +1,5 @@
 # ============================================================
-#  Flatten & Merge PDFs — PowerShell + iTextSharp
+#  Flatten & Merge PDFs - PowerShell + iTextSharp
 #  Drop run.bat and this .ps1 into a folder with your PDFs,
 #  double-click run.bat, and get merged.pdf out.
 #  No installs. Downloads iTextSharp DLL on first run (~2 MB).
@@ -167,6 +167,6 @@ Remove-Item $tempDir -Recurse -Force -ErrorAction SilentlyContinue
 
 Write-Host " Done!" -ForegroundColor Green
 Write-Host ""
-Write-Host "merged.pdf created — $totalPages total pages, no form fields." -ForegroundColor Cyan
+Write-Host "merged.pdf created - $totalPages total pages, no form fields." -ForegroundColor Cyan
 Write-Host ""
 Read-Host "Press Enter to exit"
