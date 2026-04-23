@@ -62,17 +62,22 @@ if (-not (Test-Path $dllPath)) {
         if (Test-Path $extractDir) { Remove-Item $extractDir -Recurse -Force }
         Expand-Archive -Path $zipPath -DestinationPath $extractDir -Force
 
-        # Prefer the net40 build; fall back to any match
+        # Windows PowerShell needs the net40 build - netstandard/netcore will not load
         $sourceDll = Get-ChildItem -Path $extractDir -Filter "itextsharp.dll" -Recurse |
-            Where-Object { $_.FullName -match "net40|net45|net4" } |
+            Where-Object { $_.FullName -notmatch "netstandard|netcore|net5|net6|net7|net8|net9" } |
+            Where-Object { $_.FullName -match "net4" } |
             Select-Object -First 1
 
         if (-not $sourceDll) {
+            # Fallback: anything that is not netstandard/netcore
             $sourceDll = Get-ChildItem -Path $extractDir -Filter "itextsharp.dll" -Recurse |
+                Where-Object { $_.FullName -notmatch "netstandard|netcore|net5|net6|net7|net8|net9" } |
                 Select-Object -First 1
         }
 
         if (-not $sourceDll) { throw "itextsharp.dll not found in NuGet package" }
+
+        Write-Host "  Selected: $($sourceDll.FullName)" -ForegroundColor Gray
 
         New-Item -ItemType Directory -Path $libDir -Force | Out-Null
         Copy-Item $sourceDll.FullName $dllPath -Force
@@ -92,7 +97,15 @@ if (-not (Test-Path $dllPath)) {
     }
 }
 
-Add-Type -Path $dllPath
+# If the cached DLL is the wrong build it will fail here - delete and re-run to fix
+try {
+    Add-Type -Path $dllPath
+} catch {
+    Write-Host "Failed to load iTextSharp DLL (wrong build cached). Deleting and re-run to fix." -ForegroundColor Red
+    Remove-Item $libDir -Recurse -Force -ErrorAction SilentlyContinue
+    Read-Host "Press Enter to exit"
+    exit 1
+}
 
 # --- Step 3: Flatten each PDF into a temp file ---
 # iTextSharp's PdfStamper.FormFlattening renders field values as static
