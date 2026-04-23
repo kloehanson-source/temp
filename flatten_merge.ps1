@@ -6,6 +6,13 @@
 # ============================================================
 
 $ErrorActionPreference = "Stop"
+trap {
+    Write-Host ""
+    Write-Host "UNEXPECTED ERROR: $_" -ForegroundColor Red
+    Write-Host $_.ScriptStackTrace -ForegroundColor DarkGray
+    Read-Host "Press Enter to exit"
+    exit 1
+}
 
 Write-Host ""
 Write-Host "========================================" -ForegroundColor Cyan
@@ -108,11 +115,12 @@ foreach ($pdfFile in $pdfFiles) {
         $stamper.FormFlattening     = $true   # bakes AcroForm field values into page
         $stamper.FreeTextFlattening = $true   # bakes free-text annotations too
 
+        $pageCount = $reader.NumberOfPages    # read before closing
         $stamper.Close()   # also closes $outStream
         $reader.Close()
 
         $tempFiles.Add($tempPath)
-        Write-Host " OK ($($reader.NumberOfPages) pages)" -ForegroundColor Green
+        Write-Host " OK ($pageCount pages)" -ForegroundColor Green
     }
     catch {
         Write-Host " ERROR: $_" -ForegroundColor Red
@@ -139,10 +147,11 @@ $totalPages = 0
 foreach ($tempFile in $tempFiles) {
     try {
         $reader = New-Object iTextSharp.text.pdf.PdfReader($tempFile)
-        for ($p = 1; $p -le $reader.NumberOfPages; $p++) {
+        $pages  = $reader.NumberOfPages       # read before closing
+        for ($p = 1; $p -le $pages; $p++) {
             $copy.AddPage($copy.GetImportedPage($reader, $p))
         }
-        $totalPages += $reader.NumberOfPages
+        $totalPages += $pages
         $reader.Close()
     }
     catch {
