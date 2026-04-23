@@ -173,6 +173,7 @@ $document.Close()
 
 # --- Step 5: Cleanup ---
 Remove-Item $tempDir -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item $libDir  -Recurse -Force -ErrorAction SilentlyContinue
 
 Write-Host " Done!" -ForegroundColor Green
 Write-Host ""
