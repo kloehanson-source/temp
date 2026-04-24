@@ -123,6 +123,27 @@ def _collect_all_columns(files: list) -> list:
 
 
 # ---------------------------------------------------------------------------
+# Value normalisation
+# ---------------------------------------------------------------------------
+
+def _coerce(val):
+    """
+    Prevent long integers (invoice numbers, account IDs, etc.) from being
+    stored as floats and losing digits to IEEE-754 sig-fig limits.
+
+    Excel holds everything numeric as float64.  A value like 1234567890123456
+    round-trips fine as a Python int but loses its last digit(s) as a float.
+    We cast any whole-number float to int so openpyxl writes it as an integer
+    cell rather than a scientific-notation float cell.
+
+    All other types (str, datetime, bool, None) pass through unchanged.
+    """
+    if isinstance(val, float) and val.is_integer():
+        return int(val)
+    return val
+
+
+# ---------------------------------------------------------------------------
 # Row streaming
 # ---------------------------------------------------------------------------
 
@@ -145,7 +166,7 @@ def _stream_xlsx(filepath: str, col_map: dict, n_out: int, filters: list):
                 out_row = [None] * n_out
                 for fi, fh in enumerate(sheet_headers):
                     if fi < len(row_vals) and fh in col_map:
-                        out_row[col_map[fh]] = row_vals[fi]
+                        out_row[col_map[fh]] = _coerce(row_vals[fi])
                 if _passes_filters(out_row, filters):
                     yield sheet_name, out_row
     finally:
@@ -177,11 +198,15 @@ def _stream_xls(filepath: str, col_map: dict, n_out: int, filters: list):
                 cell = ws.cell(ri, fi)
                 if cell.ctype == xlrd.XL_CELL_EMPTY:
                     val = None
+                elif cell.ctype == xlrd.XL_CELL_BOOLEAN:
+                    val = bool(cell.value)
                 elif cell.ctype == xlrd.XL_CELL_DATE:
                     try:
                         val = xlrd.xldate_as_datetime(cell.value, wb.datemode)
                     except Exception:
                         val = cell.value
+                elif cell.ctype == xlrd.XL_CELL_NUMBER:
+                    val = _coerce(cell.value)
                 else:
                     val = cell.value
                 out_row[col_map[fh]] = val
