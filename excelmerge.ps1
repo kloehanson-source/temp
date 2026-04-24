@@ -46,7 +46,7 @@ $xl.Visible        = $false
 $xl.DisplayAlerts  = $false
 $xl.ScreenUpdating = $false
 $xl.EnableEvents   = $false
-$xl.Calculation    = -4135   # xlCalculationManual
+try { $xl.Calculation = -4135 } catch {}   # xlCalculationManual - optional optimisation
 
 function ReleaseCom($o) {
     if ($null -ne $o) {
