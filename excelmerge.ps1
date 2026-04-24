@@ -203,6 +203,10 @@ $allRows      = [System.Collections.Generic.List[object[]]]::new()
 $totalOk      = 0
 $totalSkipped = 0
 
+# Per-filter hit counters - incremented independently so we can warn if a
+# filter value never matched any row regardless of other filters.
+$filterHits = New-Object int[] $filters.Count
+
 foreach ($file in $files) {
     $fname           = $file.Name
     $fileRows        = 0
@@ -253,11 +257,12 @@ foreach ($file in $files) {
                 if ($empty) { continue }
 
                 $pass = $true
-                foreach ($f in $filters) {
+                for ($fi = 0; $fi -lt $filters.Count; $fi++) {
+                    $f   = $filters[$fi]
                     $s   = if ($null -ne $row[$f.Idx]) { $row[$f.Idx].ToString().ToLower() } else { '' }
                     $hit = $false
                     foreach ($v in $f.Vals) { if ($s.Contains($v)) { $hit = $true; break } }
-                    if (-not $hit) { $pass = $false; break }
+                    if ($hit) { $filterHits[$fi]++ } else { $pass = $false }
                 }
                 if (-not $pass) { continue }
 
@@ -287,6 +292,17 @@ foreach ($file in $files) {
         $totalSkipped++
     } finally {
         if ($null -ne $wb) { $wb.Close($false); ReleaseCom $wb; $wb = $null }
+    }
+}
+
+# ---------------------------------------------------------------------------
+# Warn about any filter that never matched a single row
+# ---------------------------------------------------------------------------
+for ($fi = 0; $fi -lt $filters.Count; $fi++) {
+    if ($filterHits[$fi] -eq 0) {
+        $f = $filters[$fi]
+        Write-Host ("WARNING: filter on '{0}' for value(s) [{1}] matched zero rows across all files." `
+            -f $included[$f.Idx], ($f.Vals -join "', '")) -ForegroundColor Yellow
     }
 }
 
