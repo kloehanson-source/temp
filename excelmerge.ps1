@@ -313,10 +313,13 @@ $totalRows = $allRows.Count
 Write-Host ("`nWriting {0:N0} rows to output file..." -f $totalRows) -NoNewline
 
 if ($totalRows -gt 0) {
+    # Use SetValue() rather than $arr[$r+1,$c+1] = ... because 32-bit PowerShell
+    # misparses compound index expressions on non-default-bound arrays.
     $arr = [System.Array]::CreateInstance([object], @($totalRows, $nOut), @(1, 1))
     for ($r = 0; $r -lt $totalRows; $r++) {
+        $row = $allRows[$r]
         for ($c = 0; $c -lt $nOut; $c++) {
-            $arr[$r + 1, $c + 1] = $allRows[$r][$c]
+            $arr.SetValue($row[$c], $r + 1, $c + 1)
         }
     }
     $range = $outWs.Range($outWs.Cells(2, 1), $outWs.Cells($totalRows + 1, $nOut))
