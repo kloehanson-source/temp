@@ -65,10 +65,12 @@ function CoerceVal($v) {
 }
 
 # ---------------------------------------------------------------------------
-# Collect all column headers (one read-only pass)
+# Collect sheet names AND column headers in one read-only pass
 # ---------------------------------------------------------------------------
-Write-Host "`nScanning column headers across all files..."
-$seenLower = [System.Collections.Specialized.OrderedDictionary]::new()
+Write-Host "`nScanning worksheets and column headers across all files..."
+$seenSheets  = [System.Collections.Specialized.OrderedDictionary]::new()  # lower -> display
+$seenLower   = [System.Collections.Specialized.OrderedDictionary]::new()  # lower col -> display col
+$colToSheets = @{}   # lower col -> hashtable of lower sheet names it appeared in
 
 foreach ($file in $files) {
     $wb = $null
@@ -76,6 +78,10 @@ foreach ($file in $files) {
         $wb = $xl.Workbooks.Open($file.FullName, 0, $true)
         $sheets = $wb.Worksheets
         foreach ($ws in $sheets) {
+            $shName = $ws.Name
+            $shKey  = $shName.ToLower()
+            if (-not $seenSheets.Contains($shKey)) { $seenSheets[$shKey] = $shName }
+
             $used = $ws.UsedRange
             if ($null -eq $used) { ReleaseCom $ws; continue }
             $firstRow = $used.Row
@@ -86,8 +92,12 @@ foreach ($file in $files) {
                 if ($null -ne $v) {
                     $name = $v.ToString().Trim()
                     $key  = $name.ToLower()
-                    if ($name -ne '' -and -not $seenLower.Contains($key)) {
-                        $seenLower[$key] = $name
+                    if ($name -ne '') {
+                        if (-not $seenLower.Contains($key)) {
+                            $seenLower[$key] = $name
+                            $colToSheets[$key] = @{}
+                        }
+                        $colToSheets[$key][$shKey] = $true
                     }
                 }
             }
@@ -96,15 +106,64 @@ foreach ($file in $files) {
         }
         ReleaseCom $sheets
     } catch {
-        Write-Host "  Warning: could not read headers from '$($file.Name)': $_" -ForegroundColor Yellow
+        Write-Host "  Warning: could not read '$($file.Name)': $_" -ForegroundColor Yellow
     } finally {
         if ($null -ne $wb) { $wb.Close($false); ReleaseCom $wb; $wb = $null }
     }
 }
 
-$allCols = @($seenLower.Values)
+if ($seenSheets.Count -eq 0) {
+    Write-Host "No worksheets found in any file." -ForegroundColor Red
+    $xl.Quit(); ReleaseCom $xl; exit 1
+}
+
+# ---------------------------------------------------------------------------
+# Sheet selection
+# ---------------------------------------------------------------------------
+$allSheetNames = @($seenSheets.Values)
+Write-Host "`nWorksheets found across all files:"
+for ($i = 0; $i -lt $allSheetNames.Count; $i++) {
+    Write-Host ("  {0,4}. {1}" -f ($i + 1), $allSheetNames[$i])
+}
+$rawSheets = Read-Host "`nEnter sheet numbers to EXCLUDE (comma-separated), or press Enter to keep all"
+
+$sheetFilter = @{}   # lowercase name -> true for included sheets
+if ([string]::IsNullOrWhiteSpace($rawSheets)) {
+    foreach ($n in $allSheetNames) { $sheetFilter[$n.ToLower()] = $true }
+} else {
+    $xnumsS = @{}
+    foreach ($tok in $rawSheets.Split(',')) {
+        $n = 0
+        if ([int]::TryParse($tok.Trim(), [ref]$n)) { $xnumsS[$n] = $true }
+    }
+    for ($i = 0; $i -lt $allSheetNames.Count; $i++) {
+        if (-not $xnumsS.ContainsKey($i + 1)) { $sheetFilter[$allSheetNames[$i].ToLower()] = $true }
+    }
+    $xdS = for ($i = 0; $i -lt $allSheetNames.Count; $i++) {
+        if ($xnumsS.ContainsKey($i + 1)) { $allSheetNames[$i] }
+    }
+    if ($xdS) { Write-Host "Excluding sheets: $($xdS -join ', ')" }
+}
+if ($sheetFilter.Count -eq 0) {
+    Write-Host "No sheets remaining after exclusion." -ForegroundColor Yellow
+    $xl.Quit(); ReleaseCom $xl; exit 0
+}
+Write-Host "Including $($sheetFilter.Count) sheet(s)."
+
+# Filter the column list to only columns that appeared in at least one selected sheet
+$filteredCols = [System.Collections.Specialized.OrderedDictionary]::new()
+foreach ($key in $seenLower.Keys) {
+    foreach ($sk in $sheetFilter.Keys) {
+        if ($colToSheets[$key].ContainsKey($sk)) {
+            $filteredCols[$key] = $seenLower[$key]
+            break
+        }
+    }
+}
+
+$allCols = @($filteredCols.Values)
 if ($allCols.Count -eq 0) {
-    Write-Host "No column headers found in any file." -ForegroundColor Red
+    Write-Host "No column headers found in the selected sheets." -ForegroundColor Red
     $xl.Quit(); ReleaseCom $xl; exit 1
 }
 
@@ -220,8 +279,12 @@ foreach ($file in $files) {
 
         foreach ($ws in $sheets) {
             $sname = $ws.Name
-            $used  = $ws.UsedRange
 
+            if (-not $sheetFilter.ContainsKey($sname.ToLower())) {
+                ReleaseCom $ws; continue
+            }
+
+            $used  = $ws.UsedRange
             if ($null -eq $used -or $used.Rows.Count -lt 2) {
                 ReleaseCom $used; ReleaseCom $ws; continue
             }
