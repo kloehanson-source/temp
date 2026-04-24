@@ -336,17 +336,23 @@ foreach ($file in $files) {
 
                 $row[$srcIdx] = $fname
 
+                # Build COM-safe row: 32-bit PS COM cannot marshal Int64; convert to Double
+                $safeRow = New-Object object[] $nOut
+                for ($c = 0; $c -lt $nOut; $c++) {
+                    $safeRow[$c] = if ($row[$c] -is [long]) { [double]$row[$c] } else { $row[$c] }
+                }
+
                 # Write row to output workbook immediately
                 if ($useRowAssign) {
                     $rng = $outWs.Range($outWs.Cells($outRow, 1), $outWs.Cells($outRow, $nOut))
-                    try   { $rng.Value2 = $row }
+                    try   { $rng.Value2 = $safeRow }
                     catch { $useRowAssign = $false }
                     finally { ReleaseCom $rng }
                 }
                 if (-not $useRowAssign) {
                     for ($c = 0; $c -lt $nOut; $c++) {
-                        if ($null -ne $row[$c]) {
-                            $outWs.Cells($outRow, $c + 1).Value2 = $row[$c]
+                        if ($null -ne $safeRow[$c]) {
+                            $outWs.Cells($outRow, $c + 1).Value2 = $safeRow[$c]
                         }
                     }
                 }
