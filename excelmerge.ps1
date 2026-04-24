@@ -258,13 +258,18 @@ $outWs.Rows(1).Font.Bold = $true
 # ---------------------------------------------------------------------------
 Write-Host "`nMerging into: $outPath`n"
 
-$allRows      = [System.Collections.Generic.List[object[]]]::new()
+$outRow       = 2   # next row to write in output worksheet (row 1 = header)
+$totalRows    = 0
 $totalOk      = 0
 $totalSkipped = 0
 
 # Per-filter hit counters - incremented independently so we can warn if a
 # filter value never matched any row regardless of other filters.
 $filterHits = New-Object int[] $filters.Count
+
+# Try fast 1D-array row assignment first; if COM rejects it on this Excel/PS
+# bitness combination, fall back to cell-by-cell for the rest of the run.
+$useRowAssign = $true
 
 foreach ($file in $files) {
     $fname           = $file.Name
@@ -330,7 +335,23 @@ foreach ($file in $files) {
                 if (-not $pass) { continue }
 
                 $row[$srcIdx] = $fname
-                $allRows.Add($row)
+
+                # Write row to output workbook immediately
+                if ($useRowAssign) {
+                    $rng = $outWs.Range($outWs.Cells($outRow, 1), $outWs.Cells($outRow, $nOut))
+                    try   { $rng.Value2 = $row }
+                    catch { $useRowAssign = $false }
+                    finally { ReleaseCom $rng }
+                }
+                if (-not $useRowAssign) {
+                    for ($c = 0; $c -lt $nOut; $c++) {
+                        if ($null -ne $row[$c]) {
+                            $outWs.Cells($outRow, $c + 1).Value2 = $row[$c]
+                        }
+                    }
+                }
+                $outRow++
+                $totalRows++
                 $sheetRows++
                 $fileRows++
 
@@ -369,28 +390,7 @@ for ($fi = 0; $fi -lt $filters.Count; $fi++) {
     }
 }
 
-# ---------------------------------------------------------------------------
-# Write all rows to output in one bulk operation
-# ---------------------------------------------------------------------------
-$totalRows = $allRows.Count
-Write-Host ("`nWriting {0:N0} rows to output file..." -f $totalRows) -NoNewline
-
-if ($totalRows -gt 0) {
-    # Use SetValue() rather than $arr[$r+1,$c+1] = ... because 32-bit PowerShell
-    # misparses compound index expressions on non-default-bound arrays.
-    $arr = [System.Array]::CreateInstance([object], @($totalRows, $nOut), @(1, 1))
-    for ($r = 0; $r -lt $totalRows; $r++) {
-        $row = $allRows[$r]
-        for ($c = 0; $c -lt $nOut; $c++) {
-            $arr.SetValue($row[$c], $r + 1, $c + 1)
-        }
-    }
-    $range = $outWs.Range($outWs.Cells(2, 1), $outWs.Cells($totalRows + 1, $nOut))
-    $range.Value2 = $arr
-    ReleaseCom $range
-}
-Write-Host " done."
-
+Write-Host ("`n{0:N0} rows written to output workbook." -f $totalRows)
 Write-Host "Saving..." -NoNewline
 $outWb.SaveAs($outPath, 51)   # 51 = xlOpenXMLWorkbook (.xlsx)
 $outWb.Close($false)
