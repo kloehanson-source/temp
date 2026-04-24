@@ -334,10 +334,16 @@ def main():
 
     # col_map: lowercase column name -> index in the output row
     col_map = {col.lower(): i for i, col in enumerate(included_cols)}
-    n_out = len(included_cols)
 
     # ---- Filter setup --------------------------------------------------
+    # Filters are built before the synthetic column is added so it never
+    # appears in the filter prompt (its value isn't known until row-write time).
     filters = _prompt_filters(included_cols)
+
+    # ---- Append synthetic source-file column ---------------------------
+    included_cols.append("RYAN SOURCE FILE")
+    n_out = len(included_cols)
+    source_col_idx = n_out - 1
 
     # ---- Prepare output workbook ---------------------------------------
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -381,6 +387,7 @@ def main():
                     sheet_rows = 0
                     print(f"      '{sheet_name}'...", end="", flush=True)
 
+                out_row[source_col_idx] = fname
                 out_ws.append(out_row)
                 sheet_rows += 1
                 file_rows += 1
