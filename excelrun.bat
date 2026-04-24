@@ -1,54 +1,60 @@
 @echo off
 cd /d "%~dp0"
 
-:: -----------------------------------------------------------------------
-:: Find Python, skipping Windows Store app-execution-alias stubs.
-:: Those stubs live under %LOCALAPPDATA%\Microsoft\WindowsApps and only
-:: open the Store instead of running Python.
-:: -----------------------------------------------------------------------
 set PYTHON=
 
-:: 1. Check PATH entries (py launcher or python), ignoring WindowsApps stubs
-for /f "usebackq delims=" %%P in (
-    `powershell -NoProfile -Command "Get-Command python,py -ErrorAction SilentlyContinue | Where-Object {$_.Source -notlike '*WindowsApps*'} | Select-Object -First 1 -ExpandProperty Source"`
-) do set PYTHON=%%P
-
-:: 2. Fall back: search the default per-user install location
-if not defined PYTHON (
-    for /f "usebackq delims=" %%P in (
-        `powershell -NoProfile -Command "Get-ChildItem $env:LOCALAPPDATA\Programs\Python -Filter python.exe -Recurse -ErrorAction SilentlyContinue | Sort-Object FullName -Descending | Select-Object -First 1 -ExpandProperty FullName"`
-    ) do set PYTHON=%%P
+:: --- 1. Check PATH, skip Windows Store stubs (they live under WindowsApps) ---
+for /f "delims=" %%P in ('where py 2^>nul') do (
+    echo %%P | findstr /i "WindowsApps" >nul || ( set PYTHON=%%P & goto :found )
+)
+for /f "delims=" %%P in ('where python 2^>nul') do (
+    echo %%P | findstr /i "WindowsApps" >nul || ( set PYTHON=%%P & goto :found )
 )
 
-:: 3. Fall back: search Program Files
-if not defined PYTHON (
-    for /f "usebackq delims=" %%P in (
-        `powershell -NoProfile -Command "Get-ChildItem 'C:\Program Files\Python*','C:\Python*' -Filter python.exe -Recurse -ErrorAction SilentlyContinue | Sort-Object FullName -Descending | Select-Object -First 1 -ExpandProperty FullName"`
-    ) do set PYTHON=%%P
-)
+:: --- 2. Check common per-user install locations (no PowerShell needed) ---
+for %%D in (
+    "%LOCALAPPDATA%\Programs\Python\Python314"
+    "%LOCALAPPDATA%\Programs\Python\Python313"
+    "%LOCALAPPDATA%\Programs\Python\Python312"
+    "%LOCALAPPDATA%\Programs\Python\Python311"
+    "%LOCALAPPDATA%\Programs\Python\Python310"
+    "%LOCALAPPDATA%\Programs\Python\Python39"
+    "%LOCALAPPDATA%\Programs\Python\Python38"
+) do if exist "%%~D\python.exe" ( set PYTHON=%%~D\python.exe & goto :found )
 
-if not defined PYTHON (
-    echo.
-    echo ERROR: Python was not found on this machine.
-    echo.
-    echo  1. Download and install Python from  https://www.python.org/downloads/
-    echo  2. During setup tick "Add Python to PATH"
-    echo  3. Re-run this script
-    echo.
-    echo If Python IS installed but you still see this, also go to:
-    echo  Settings ^> Apps ^> Advanced app settings ^> App execution aliases
-    echo  and turn OFF "App Installer - python.exe"
-    echo.
-    pause
-    exit /b 1
-)
+:: --- 3. Check common system-wide install locations ---
+for %%D in (
+    "C:\Python314"
+    "C:\Python313"
+    "C:\Python312"
+    "C:\Python311"
+    "C:\Python310"
+    "C:\Python39"
+    "C:\Python38"
+    "C:\Program Files\Python314"
+    "C:\Program Files\Python313"
+    "C:\Program Files\Python312"
+    "C:\Program Files\Python311"
+    "C:\Program Files\Python310"
+) do if exist "%%~D\python.exe" ( set PYTHON=%%~D\python.exe & goto :found )
 
+echo.
+echo  ERROR: Python was not found on this machine.
+echo.
+echo  Install from:  https://www.python.org/downloads/
+echo  During setup, tick "Add Python to PATH"
+echo.
+echo  If Python is installed but you still see this:
+echo    Settings ^> Apps ^> Advanced app settings ^> App execution aliases
+echo    Turn OFF "App Installer - python.exe"
+echo.
+pause
+exit /b 1
+
+:found
 echo Using: %PYTHON%
 echo.
 
-:: -----------------------------------------------------------------------
-:: Prompt for folder if the bat was double-clicked with no argument
-:: -----------------------------------------------------------------------
 if "%~1"=="" (
     set /p FOLDER="Enter folder path: "
     "%PYTHON%" excelmerge.py "%FOLDER%"
