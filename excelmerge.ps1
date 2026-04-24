@@ -267,10 +267,6 @@ $totalSkipped = 0
 # filter value never matched any row regardless of other filters.
 $filterHits = New-Object int[] $filters.Count
 
-# Try fast 1D-array row assignment first; if COM rejects it on this Excel/PS
-# bitness combination, fall back to cell-by-cell for the rest of the run.
-$useRowAssign = $true
-
 foreach ($file in $files) {
     $fname           = $file.Name
     $fileRows        = 0
@@ -336,25 +332,17 @@ foreach ($file in $files) {
 
                 $row[$srcIdx] = $fname
 
-                # Build COM-safe row: 32-bit PS COM cannot marshal Int64; convert to Double
-                $safeRow = New-Object object[] $nOut
+                # Write row cell-by-cell using local typed variables.
+                # 32-bit PS COM cannot marshal Int64 or boxed values from object[];
+                # assigning via a local variable preserves the .NET type so COM
+                # marshals correctly.  Int64 -> Double at write time (Excel stores
+                # all numbers as Double anyway; precision is already capped by
+                # whatever the source file held).
                 for ($c = 0; $c -lt $nOut; $c++) {
-                    $safeRow[$c] = if ($row[$c] -is [long]) { [double]$row[$c] } else { $row[$c] }
-                }
-
-                # Write row to output workbook immediately
-                if ($useRowAssign) {
-                    $rng = $outWs.Range($outWs.Cells($outRow, 1), $outWs.Cells($outRow, $nOut))
-                    try   { $rng.Value2 = $safeRow }
-                    catch { $useRowAssign = $false }
-                    finally { ReleaseCom $rng }
-                }
-                if (-not $useRowAssign) {
-                    for ($c = 0; $c -lt $nOut; $c++) {
-                        if ($null -ne $safeRow[$c]) {
-                            $outWs.Cells($outRow, $c + 1).Value2 = $safeRow[$c]
-                        }
-                    }
+                    $v = $row[$c]
+                    if ($null -eq $v) { continue }
+                    if ($v -is [long]) { $v = [double]$v }
+                    $outWs.Cells($outRow, $c + 1).Value2 = $v
                 }
                 $outRow++
                 $totalRows++
