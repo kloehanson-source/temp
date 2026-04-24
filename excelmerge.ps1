@@ -2,7 +2,9 @@ param(
     [string]$FolderPath
 )
 
-# ── Folder ───────────────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------
+# Folder
+# ---------------------------------------------------------------------------
 if (-not $FolderPath) {
     $FolderPath = (Read-Host "`nEnter folder path").Trim('"').Trim("'")
 }
@@ -12,7 +14,9 @@ if (-not (Test-Path $FolderPath -PathType Container)) {
     exit 1
 }
 
-# ── Find Excel files ─────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------
+# Find Excel files
+# ---------------------------------------------------------------------------
 $files = @(Get-ChildItem -Path $FolderPath -File |
     Where-Object {
         ($_.Extension -ieq '.xlsx' -or $_.Extension -ieq '.xls') -and
@@ -29,18 +33,20 @@ foreach ($f in $files) {
     Write-Host ("  - {0}  ({1:F1} MB)" -f $f.Name, ($f.Length / 1MB))
 }
 
-# ── Start Excel ───────────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------
+# Start Excel
+# ---------------------------------------------------------------------------
 try {
     $xl = New-Object -ComObject Excel.Application
 } catch {
     Write-Host "`nERROR: Could not start Excel. Is Microsoft Excel installed?" -ForegroundColor Red
     exit 1
 }
-$xl.Visible         = $false
-$xl.DisplayAlerts   = $false
-$xl.ScreenUpdating  = $false
-$xl.EnableEvents    = $false
-$xl.Calculation     = -4135   # xlCalculationManual
+$xl.Visible        = $false
+$xl.DisplayAlerts  = $false
+$xl.ScreenUpdating = $false
+$xl.EnableEvents   = $false
+$xl.Calculation    = -4135   # xlCalculationManual
 
 function ReleaseCom($o) {
     if ($null -ne $o) {
@@ -58,7 +64,9 @@ function CoerceVal($v) {
     return $v
 }
 
-# ── Collect all column headers (one read-only pass) ──────────────────────────
+# ---------------------------------------------------------------------------
+# Collect all column headers (one read-only pass)
+# ---------------------------------------------------------------------------
 Write-Host "`nScanning column headers across all files..."
 $seenLower = [System.Collections.Specialized.OrderedDictionary]::new()
 
@@ -100,7 +108,9 @@ if ($allCols.Count -eq 0) {
     $xl.Quit(); ReleaseCom $xl; exit 1
 }
 
-# ── Column selection ──────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------
+# Column selection
+# ---------------------------------------------------------------------------
 Write-Host "`nUnique columns found across all files:"
 for ($i = 0; $i -lt $allCols.Count; $i++) {
     Write-Host ("  {0,4}. {1}" -f ($i + 1), $allCols[$i])
@@ -119,7 +129,9 @@ if ([string]::IsNullOrWhiteSpace($raw)) {
     for ($i = 0; $i -lt $allCols.Count; $i++) {
         if (-not $xnums.ContainsKey($i + 1)) { $included.Add($allCols[$i]) }
     }
-    $xd = for ($i = 0; $i -lt $allCols.Count; $i++) { if ($xnums.ContainsKey($i+1)) { $allCols[$i] } }
+    $xd = for ($i = 0; $i -lt $allCols.Count; $i++) {
+        if ($xnums.ContainsKey($i + 1)) { $allCols[$i] }
+    }
     if ($xd) { Write-Host "Excluding: $($xd -join ', ')" }
 }
 if ($included.Count -eq 0) {
@@ -131,25 +143,27 @@ Write-Host "`nRetaining $($included.Count) column(s)."
 $colMap = @{}
 for ($i = 0; $i -lt $included.Count; $i++) { $colMap[$included[$i].ToLower()] = $i }
 
-# ── Filters ───────────────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------
+# Filters
+# ---------------------------------------------------------------------------
 $filters = [System.Collections.Generic.List[hashtable]]::new()
 while ($true) {
     if ((Read-Host "`nFilter by a column value? (y/n)").Trim().ToLower() -ne 'y') { break }
 
     Write-Host "`nIncluded columns:"
     for ($i = 0; $i -lt $included.Count; $i++) {
-        Write-Host ("  {0,4}. {1}" -f ($i+1), $included[$i])
+        Write-Host ("  {0,4}. {1}" -f ($i + 1), $included[$i])
     }
     $cn = 0
     $cr = Read-Host "Enter column number to filter on"
     if (-not [int]::TryParse($cr.Trim(), [ref]$cn) -or $cn -lt 1 -or $cn -gt $included.Count) {
-        Write-Host "Invalid — skipping." -ForegroundColor Yellow; continue
+        Write-Host "Invalid - skipping." -ForegroundColor Yellow; continue
     }
-    $ci   = $cn - 1
+    $ci    = $cn - 1
     $cname = $included[$ci]
-    $vr   = Read-Host "Enter value(s) to keep in '$cname' (comma-separated, partial match OK)"
+    $vr    = Read-Host "Enter value(s) to keep in column '$cname' (comma-separated, partial match OK)"
     if ([string]::IsNullOrWhiteSpace($vr)) {
-        Write-Host "No values entered — skipping." -ForegroundColor Yellow; continue
+        Write-Host "No values entered - skipping." -ForegroundColor Yellow; continue
     }
     $fv = @($vr.Split(',') | ForEach-Object { $_.Trim().ToLower() } | Where-Object { $_ -ne '' })
     $filters.Add(@{ Idx = $ci; Vals = $fv })
@@ -157,39 +171,43 @@ while ($true) {
     if ((Read-Host "Add another filter? (y/n)").Trim().ToLower() -ne 'y') { break }
 }
 
-# ── Append RYAN SOURCE FILE column ───────────────────────────────────────────
+# ---------------------------------------------------------------------------
+# Append RYAN SOURCE FILE column
+# ---------------------------------------------------------------------------
 $included.Add("RYAN SOURCE FILE")
 $nOut   = $included.Count
 $srcIdx = $nOut - 1
 
-# ── Create output workbook ───────────────────────────────────────────────────
+# ---------------------------------------------------------------------------
+# Create output workbook
+# ---------------------------------------------------------------------------
 $ts      = Get-Date -Format 'yyyyMMdd_HHmmss'
 $outPath = Join-Path $FolderPath "consolidated_$ts.xlsx"
 $outWb   = $xl.Workbooks.Add()
 
-# Remove extra blank sheets, keep one
 while ($outWb.Worksheets.Count -gt 1) {
     $outWb.Worksheets($outWb.Worksheets.Count).Delete()
 }
-$outWs = $outWb.Worksheets(1)
+$outWs      = $outWb.Worksheets(1)
 $outWs.Name = "Consolidated"
 
-# Write header row
-for ($c = 0; $c -lt $nOut; $c++) { $outWs.Cells(1, $c+1).Value2 = $included[$c] }
+for ($c = 0; $c -lt $nOut; $c++) { $outWs.Cells(1, $c + 1).Value2 = $included[$c] }
 $outWs.Rows(1).Font.Bold = $true
 
-# ── Process files ─────────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------
+# Process files
+# ---------------------------------------------------------------------------
 Write-Host "`nMerging into: $outPath`n"
 
-$allRows     = [System.Collections.Generic.List[object[]]]::new()
-$totalOk     = 0
+$allRows      = [System.Collections.Generic.List[object[]]]::new()
+$totalOk      = 0
 $totalSkipped = 0
 
 foreach ($file in $files) {
-    $fname    = $file.Name
-    $fileRows = 0
+    $fname           = $file.Name
+    $fileRows        = 0
     $sheetsProcessed = 0
-    $wb = $null
+    $wb              = $null
     Write-Host "  [ ] $fname"
 
     try {
@@ -209,11 +227,9 @@ foreach ($file in $files) {
 
             Write-Host "      '$sname'..." -NoNewline
 
-            # Read entire sheet in one COM call
             $data  = $used.Value2
             $isArr = $data -is [System.Array]
 
-            # Map this sheet's columns to output indices
             $shMap = @{}
             for ($c = 1; $c -le $ncols; $c++) {
                 $h = if ($isArr) { $data[1, $c] } else { $data }
@@ -236,7 +252,6 @@ foreach ($file in $files) {
                 }
                 if ($empty) { continue }
 
-                # Apply filters
                 $pass = $true
                 foreach ($f in $filters) {
                     $s   = if ($null -ne $row[$f.Idx]) { $row[$f.Idx].ToString().ToLower() } else { '' }
@@ -264,27 +279,28 @@ foreach ($file in $files) {
 
         ReleaseCom $sheets
         $sw = if ($sheetsProcessed -eq 1) { "sheet" } else { "sheets" }
-        Write-Host ("  [+] {0}  — {1} {2}, {3:N0} rows total" -f $fname, $sheetsProcessed, $sw, $fileRows)
+        Write-Host ("  [+] {0} - {1} {2}, {3:N0} rows total" -f $fname, $sheetsProcessed, $sw, $fileRows)
         $totalOk++
 
     } catch {
-        Write-Host ("`r  [!] {0}  — skipped: {1}" -f $fname, $_) -ForegroundColor Yellow
+        Write-Host ("`r  [!] {0} - skipped: {1}" -f $fname, $_) -ForegroundColor Yellow
         $totalSkipped++
     } finally {
         if ($null -ne $wb) { $wb.Close($false); ReleaseCom $wb; $wb = $null }
     }
 }
 
-# ── Write all rows to output in one bulk operation ───────────────────────────
+# ---------------------------------------------------------------------------
+# Write all rows to output in one bulk operation
+# ---------------------------------------------------------------------------
 $totalRows = $allRows.Count
 Write-Host ("`nWriting {0:N0} rows to output file..." -f $totalRows) -NoNewline
 
 if ($totalRows -gt 0) {
-    # 1-based 2D array for clean COM handoff
     $arr = [System.Array]::CreateInstance([object], @($totalRows, $nOut), @(1, 1))
     for ($r = 0; $r -lt $totalRows; $r++) {
         for ($c = 0; $c -lt $nOut; $c++) {
-            $arr[$r+1, $c+1] = $allRows[$r][$c]
+            $arr[$r + 1, $c + 1] = $allRows[$r][$c]
         }
     }
     $range = $outWs.Range($outWs.Cells(2, 1), $outWs.Cells($totalRows + 1, $nOut))
@@ -305,7 +321,9 @@ ReleaseCom $xl
 [System.GC]::Collect()
 [System.GC]::WaitForPendingFinalizers()
 
-# ── Summary ───────────────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------
+# Summary
+# ---------------------------------------------------------------------------
 $sep = "=" * 56
 Write-Host "`n$sep`n  SUMMARY`n$sep"
 Write-Host "  Files processed  : $totalOk"
