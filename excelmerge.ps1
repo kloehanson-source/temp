@@ -64,6 +64,18 @@ function CoerceVal($v) {
     return $v
 }
 
+function ColumnLetter([int]$n) {
+    $s = ''
+    while ($n -gt 0) { $n--; $s = [char](65 + ($n % 26)) + $s; $n = [int]($n / 26) }
+    $s
+}
+
+function XmlEsc([string]$s) {
+    $s.Replace('&','&amp;').Replace('<','&lt;').Replace('>','&gt;').Replace('"','&quot;')
+}
+
+$InvCulture = [System.Globalization.CultureInfo]::InvariantCulture
+
 # ---------------------------------------------------------------------------
 # Collect sheet names AND column headers in one read-only pass
 # ---------------------------------------------------------------------------
