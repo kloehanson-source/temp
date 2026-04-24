@@ -57,29 +57,38 @@ def _find_excel_files(folder: str) -> list:
 # ---------------------------------------------------------------------------
 
 def _headers_xlsx(filepath: str):
-    """Return (list[str], None) on success or (None, err_str) on failure."""
+    """Return (list[str], None) — unique headers across ALL sheets — or (None, err_str)."""
     try:
         wb = openpyxl.load_workbook(filepath, read_only=True, data_only=True)
-        ws = wb.active
-        headers = []
-        for row in ws.iter_rows(min_row=1, max_row=1, values_only=True):
-            headers = [str(c).strip() if c is not None else "" for c in row]
+        seen: dict = {}
+        for ws in wb.worksheets:
+            for row in ws.iter_rows(min_row=1, max_row=1, values_only=True):
+                for c in row:
+                    col = str(c).strip() if c is not None else ""
+                    if col and col.lower() not in seen:
+                        seen[col.lower()] = col
         wb.close()
-        return headers, None
+        return list(seen.values()), None
     except Exception as exc:
         return None, str(exc)
 
 
 def _headers_xls(filepath: str):
-    """Return (list[str], None) on success or (None, err_str) on failure."""
+    """Return (list[str], None) — unique headers across ALL sheets — or (None, err_str)."""
     try:
         wb = xlrd.open_workbook(filepath, on_demand=True)
-        ws = wb.sheet_by_index(0)
-        if ws.nrows == 0:
-            return [], None
-        headers = [str(ws.cell(0, c).value).strip() for c in range(ws.ncols)]
-        wb.release_resources()
-        return headers, None
+        seen: dict = {}
+        for si in range(wb.nsheets):
+            ws = wb.sheet_by_index(si)
+            if ws.nrows == 0:
+                wb.unload_sheet(si)
+                continue
+            for c in range(ws.ncols):
+                col = str(ws.cell(0, c).value).strip()
+                if col and col.lower() not in seen:
+                    seen[col.lower()] = col
+            wb.unload_sheet(si)
+        return list(seen.values()), None
     except Exception as exc:
         return None, str(exc)
 
@@ -118,74 +127,73 @@ def _collect_all_columns(files: list) -> list:
 # ---------------------------------------------------------------------------
 
 def _stream_xlsx(filepath: str, col_map: dict, n_out: int, filters: list):
-    """Yield output rows from an xlsx file using read-only / streaming mode."""
+    """Yield (sheet_name, row) for every data row across ALL sheets."""
     wb = openpyxl.load_workbook(filepath, read_only=True, data_only=True)
-    ws = wb.active
-    file_headers_lower = None
     try:
-        for row_vals in ws.iter_rows(values_only=True):
-            # First row is the header
-            if file_headers_lower is None:
-                file_headers_lower = [
-                    str(c).strip().lower() if c is not None else ""
-                    for c in row_vals
-                ]
-                continue
-
-            # Skip rows that are completely empty
-            if all(c is None for c in row_vals):
-                continue
-
-            out_row = [None] * n_out
-            for fi, fh in enumerate(file_headers_lower):
-                if fi < len(row_vals) and fh in col_map:
-                    val = row_vals[fi]
-                    out_row[col_map[fh]] = val
-
-            if _passes_filters(out_row, filters):
-                yield out_row
+        for ws in wb.worksheets:
+            sheet_name = ws.title
+            sheet_headers = None
+            for row_vals in ws.iter_rows(values_only=True):
+                if sheet_headers is None:
+                    sheet_headers = [
+                        str(c).strip().lower() if c is not None else ""
+                        for c in row_vals
+                    ]
+                    continue
+                if all(c is None for c in row_vals):
+                    continue
+                out_row = [None] * n_out
+                for fi, fh in enumerate(sheet_headers):
+                    if fi < len(row_vals) and fh in col_map:
+                        out_row[col_map[fh]] = row_vals[fi]
+                if _passes_filters(out_row, filters):
+                    yield sheet_name, out_row
     finally:
         wb.close()
 
 
 def _stream_xls(filepath: str, col_map: dict, n_out: int, filters: list):
-    """Yield output rows from an xls file using xlrd."""
+    """Yield (sheet_name, row) for every data row across ALL sheets."""
     wb = xlrd.open_workbook(filepath, on_demand=True)
-    ws = wb.sheet_by_index(0)
 
-    if ws.nrows < 2:
-        return
+    for si in range(wb.nsheets):
+        ws = wb.sheet_by_index(si)
+        sheet_name = ws.name
 
-    file_headers_lower = [
-        str(ws.cell(0, c).value).strip().lower() for c in range(ws.ncols)
-    ]
-
-    for ri in range(1, ws.nrows):
-        out_row = [None] * n_out
-        all_empty = True
-
-        for fi, fh in enumerate(file_headers_lower):
-            if fh not in col_map:
-                continue
-            cell = ws.cell(ri, fi)
-            if cell.ctype == xlrd.XL_CELL_EMPTY:
-                val = None
-            elif cell.ctype == xlrd.XL_CELL_DATE:
-                try:
-                    val = xlrd.xldate_as_datetime(cell.value, wb.datemode)
-                except Exception:
-                    val = cell.value
-            else:
-                val = cell.value
-            out_row[col_map[fh]] = val
-            if val is not None and val != "":
-                all_empty = False
-
-        if all_empty:
+        if ws.nrows < 2:
+            wb.unload_sheet(si)
             continue
 
-        if _passes_filters(out_row, filters):
-            yield out_row
+        sheet_headers = [
+            str(ws.cell(0, c).value).strip().lower() for c in range(ws.ncols)
+        ]
+
+        for ri in range(1, ws.nrows):
+            out_row = [None] * n_out
+            all_empty = True
+            for fi, fh in enumerate(sheet_headers):
+                if fh not in col_map:
+                    continue
+                cell = ws.cell(ri, fi)
+                if cell.ctype == xlrd.XL_CELL_EMPTY:
+                    val = None
+                elif cell.ctype == xlrd.XL_CELL_DATE:
+                    try:
+                        val = xlrd.xldate_as_datetime(cell.value, wb.datemode)
+                    except Exception:
+                        val = cell.value
+                else:
+                    val = cell.value
+                out_row[col_map[fh]] = val
+                if val is not None and val != "":
+                    all_empty = False
+
+            if all_empty:
+                continue
+            if _passes_filters(out_row, filters):
+                yield sheet_name, out_row
+
+        wb.unload_sheet(si)
 
 
 # ---------------------------------------------------------------------------
@@ -351,7 +359,7 @@ def main():
         ext = os.path.splitext(filepath)[1].lower()
         file_rows = 0
 
-        print(f"  [ ] {fname}", end="", flush=True)
+        print(f"  [ ] {fname}", flush=True)
 
         try:
             gen = (
@@ -360,17 +368,36 @@ def main():
                 else _stream_xls(filepath, col_map, n_out, filters)
             )
 
-            for out_row in gen:
+            current_sheet = None
+            sheet_rows = 0
+            sheet_tally = []   # [(name, count), ...]
+
+            for sheet_name, out_row in gen:
+                if sheet_name != current_sheet:
+                    if current_sheet is not None:
+                        print(f"\r      '{current_sheet}': {sheet_rows:,} rows")
+                        sheet_tally.append((current_sheet, sheet_rows))
+                    current_sheet = sheet_name
+                    sheet_rows = 0
+                    print(f"      '{sheet_name}'...", end="", flush=True)
+
                 out_ws.append(out_row)
+                sheet_rows += 1
                 file_rows += 1
-                if file_rows % 10_000 == 0:
+                if sheet_rows % 10_000 == 0:
                     print(
-                        f"\r  [~] {fname}  ({file_rows:,} rows so far...)",
+                        f"\r      '{current_sheet}': {sheet_rows:,} rows so far...",
                         end="",
                         flush=True,
                     )
 
-            print(f"\r  [✓] {fname}  — {file_rows:,} rows")
+            if current_sheet is not None:
+                print(f"\r      '{current_sheet}': {sheet_rows:,} rows")
+                sheet_tally.append((current_sheet, sheet_rows))
+
+            n_sheets = len(sheet_tally)
+            sheet_label = f"{n_sheets} sheet{'s' if n_sheets != 1 else ''}"
+            print(f"  [✓] {fname}  — {sheet_label}, {file_rows:,} rows total")
             total_ok += 1
             total_rows += file_rows
 
