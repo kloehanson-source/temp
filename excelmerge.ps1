@@ -89,7 +89,7 @@ $colToSheets = @{}   # lower col -> hashtable of lower sheet names it appeared i
 foreach ($file in $files) {
     $wb = $null
     try {
-        $wb = $xl.Workbooks.Open($file.FullName, 0, $true, [Type]::Missing, [Type]::Missing, [Type]::Missing, $true, [Type]::Missing, [Type]::Missing, [Type]::Missing, $false)
+        $wb = $xl.Workbooks.Open($file.FullName, 0, $true)
         $sheets = $wb.Worksheets
         foreach ($ws in $sheets) {
             $shName = $ws.Name
@@ -339,7 +339,7 @@ foreach ($file in $files) {
     Write-Host "  [ ] $fname"
 
     try {
-        $wb     = $xl.Workbooks.Open($file.FullName, 0, $true, [Type]::Missing, [Type]::Missing, [Type]::Missing, $true, [Type]::Missing, [Type]::Missing, [Type]::Missing, $false)
+        $wb     = $xl.Workbooks.Open($file.FullName, 0, $true)
         $sheets = $wb.Worksheets
 
         foreach ($ws in $sheets) {
