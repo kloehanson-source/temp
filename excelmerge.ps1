@@ -239,6 +239,10 @@ while ($true) {
     $fv = @($vr.Split(',') | ForEach-Object { $_.Trim().ToLower() } | Where-Object { $_ -ne '' })
     $filters.Add(@{ Idx = $ci; Vals = $fv })
     Write-Host "  Filter added: '$cname' contains any of [$($fv -join ', ')]"
+    if ($filters.Count -ge 2) {
+        Write-Host ("  NOTE: all {0} filters must be true on the SAME ROW (AND logic)." -f $filters.Count) `
+            -ForegroundColor Cyan
+    }
     if ((Read-Host "Add another filter? (y/n)").Trim().ToLower() -ne 'y') { break }
 }
 
@@ -357,7 +361,8 @@ foreach ($file in $files) {
                     $s   = if ($null -ne $row[$f.Idx]) { $row[$f.Idx].ToString().ToLower() } else { '' }
                     $hit = $false
                     foreach ($v in $f.Vals) { if ($s.Contains($v)) { $hit = $true; break } }
-                    if ($hit) { $filterHits[$fi]++ } else { $pass = $false }
+                    if ($hit)      { $filterHits[$fi]++ }
+                    if (-not $hit) { $pass = $false }
                 }
                 if (-not $pass) { continue }
 
@@ -435,6 +440,25 @@ for ($fi = 0; $fi -lt $filters.Count; $fi++) {
         $f = $filters[$fi]
         Write-Host ("WARNING: filter on '{0}' for value(s) [{1}] matched zero rows across all files." `
             -f $included[$f.Idx], ($f.Vals -join "', '")) -ForegroundColor Yellow
+    }
+}
+
+if ($totalRows -eq 0 -and $filters.Count -gt 1) {
+    $allHadHits = $true
+    for ($fi = 0; $fi -lt $filters.Count; $fi++) {
+        if ($filterHits[$fi] -eq 0) { $allHadHits = $false; break }
+    }
+    if ($allHadHits) {
+        Write-Host ("WARNING: no rows matched all $($filters.Count) filters on the same row.") `
+            -ForegroundColor Yellow
+        Write-Host "  Each filter's individual match count:" -ForegroundColor Yellow
+        for ($fi = 0; $fi -lt $filters.Count; $fi++) {
+            $f = $filters[$fi]
+            Write-Host ("    Filter $($fi+1) -- '{0}' contains [{1}]: {2:N0} rows" `
+                -f $included[$f.Idx], ($f.Vals -join "', '"), $filterHits[$fi]) -ForegroundColor Yellow
+        }
+        Write-Host "  If both counts look right, those values may not co-exist on any single row." `
+            -ForegroundColor Yellow
     }
 }
 
