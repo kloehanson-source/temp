@@ -357,7 +357,7 @@ foreach ($file in $files) {
             $data  = $used.Value2
             $isArr = $data -is [System.Array]
 
-            # Auto-detect header row — handles files with a title row above the real headers
+            # Auto-detect header row -- handles files with a title row above the real headers
             $headerRow   = 1
             $bestMatches = 0
             $scanTo      = [Math]::Min(5, $nrows)
@@ -383,7 +383,7 @@ foreach ($file in $files) {
 
             Write-Host ("        header row {0}, {1} column(s) mapped" -f $headerRow, $shMap.Count) -ForegroundColor DarkGray
             if ($shMap.Count -eq 0) {
-                Write-Host "        WARNING: no columns matched — check header spelling in this file." -ForegroundColor Yellow
+                Write-Host "        WARNING: no columns matched - check header spelling in this file." -ForegroundColor Yellow
                 ReleaseCom $used; ReleaseCom $ws; continue
             }
 
