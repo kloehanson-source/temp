@@ -95,6 +95,7 @@ foreach ($file in $files) {
     $wb = $null
     try {
         $wb = $xl.Workbooks.Open($file.FullName, 0, $true)
+        try { $xl.Calculation = -4135 } catch {}
         $sheets = $wb.Worksheets
         foreach ($ws in $sheets) {
             $shName = $ws.Name
@@ -345,6 +346,9 @@ foreach ($file in $files) {
 
     try {
         $wb     = $xl.Workbooks.Open($file.FullName, 0, $true)
+        # Force manual calc AFTER open -- Application.Calculation is a no-op when no workbook is loaded,
+        # so without this the workbook may keep its saved Automatic mode and recalc on every Value2 read.
+        try { $xl.Calculation = -4135 } catch {}
         $sheets = $wb.Worksheets
 
         foreach ($ws in $sheets) {
@@ -405,11 +409,12 @@ foreach ($file in $files) {
             }
 
             # Read data in chunks of CHUNK rows so no single Value2 call marshals the whole sheet
-            $CHUNK        = 2000
+            $CHUNK        = 500
             $firstDataRow = $absFirst + $headerRow
             $lastRow      = $absFirst + $nrows - 1
             $lastCol      = $absFirstCol + $ncols - 1
             $sheetRows    = 0
+            $emptyChunkStreak = 0
 
             $chunkStart = $firstDataRow
             while ($chunkStart -le $lastRow) {
@@ -420,6 +425,7 @@ foreach ($file in $files) {
                 $chunkIsArr = $chunk -is [System.Array]
                 $chunkIs2D  = $chunkIsArr -and ($chunk.Rank -eq 2)
                 $chunkRows  = $chunkEnd - $chunkStart + 1
+                $chunkKept  = 0
 
                 for ($ri = 1; $ri -le $chunkRows; $ri++) {
                     $row   = New-Object object[] $nOut
@@ -432,6 +438,7 @@ foreach ($file in $files) {
                         if ($null -ne $v -and "$v" -ne '') { $empty = $false }
                     }
                     if ($empty) { continue }
+                    $chunkKept++
 
                     $pass = $true
                     for ($fi = 0; $fi -lt $filters.Count; $fi++) {
@@ -492,11 +499,19 @@ foreach ($file in $files) {
                 }
 
                 $chunk = $null
-                $chunkStart = $chunkEnd + 1
 
-                if ($sheetRows % 5000 -eq 0 -and $sheetRows -gt 0) {
-                    Write-Host ("`r      '$sname': {0:N0} rows so far..." -f $sheetRows) -NoNewline
+                # Detect inflated UsedRange: if 5 chunks in a row are entirely empty AND we've already
+                # seen real data, assume the rest of the "used range" is phantom formatting and stop.
+                if ($chunkKept -eq 0) { $emptyChunkStreak++ } else { $emptyChunkStreak = 0 }
+                if ($emptyChunkStreak -ge 5 -and $sheetRows -gt 0) {
+                    Write-Host ("`r      '$sname': stopped at row {0:N0} (rest of range appears empty)" -f $chunkEnd) -ForegroundColor DarkGray
+                    break
                 }
+
+                Write-Host ("`r      '$sname': scanned through row {0:N0}/{1:N0}, kept {2:N0}..." `
+                    -f ($chunkEnd - $absFirst + 1), $nrows, $sheetRows) -NoNewline
+
+                $chunkStart = $chunkEnd + 1
             }
 
             Write-Host ("`r      '$sname': {0:N0} rows          " -f $sheetRows)
