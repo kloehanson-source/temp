@@ -92,9 +92,13 @@ $seenLower   = [System.Collections.Specialized.OrderedDictionary]::new()  # lowe
 $colToSheets = @{}   # lower col -> hashtable of lower sheet names it appeared in
 
 foreach ($file in $files) {
-    $wb = $null
+    $wb      = $null
+    $tmpScan = $null
     try {
-        $wb = $xl.Workbooks.Open($file.FullName, 0, $true)
+        # Copy to local temp so Excel COM calls don't traverse the network on every read
+        $tmpScan = [System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), "excelmerge_" + [System.Guid]::NewGuid().ToString("N") + "_" + $file.Name)
+        Copy-Item -LiteralPath $file.FullName -Destination $tmpScan -Force
+        $wb = $xl.Workbooks.Open($tmpScan, 0, $true)
         try { $xl.Calculation = -4135 } catch {}
         $sheets = $wb.Worksheets
         foreach ($ws in $sheets) {
@@ -145,6 +149,7 @@ foreach ($file in $files) {
         Write-Host "  Warning: could not read '$($file.Name)': $_" -ForegroundColor Yellow
     } finally {
         if ($null -ne $wb) { $wb.Close($false); ReleaseCom $wb; $wb = $null }
+        if ($null -ne $tmpScan) { Remove-Item -LiteralPath $tmpScan -Force -ErrorAction SilentlyContinue; $tmpScan = $null }
     }
     [System.GC]::Collect()
     [System.GC]::WaitForPendingFinalizers()
@@ -342,10 +347,16 @@ foreach ($file in $files) {
     $fileRows        = 0
     $sheetsProcessed = 0
     $wb              = $null
+    $tmpMerge        = $null
     Write-Host "  [ ] $fname"
 
     try {
-        $wb     = $xl.Workbooks.Open($file.FullName, 0, $true)
+        # Copy to local temp so every per-cell COM call reads from local disk, not the network
+        Write-Host "      Copying to local temp..." -NoNewline
+        $tmpMerge = [System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), "excelmerge_" + [System.Guid]::NewGuid().ToString("N") + "_" + $file.Name)
+        Copy-Item -LiteralPath $file.FullName -Destination $tmpMerge -Force
+        Write-Host " done ($([Math]::Round((Get-Item $tmpMerge).Length / 1MB, 1)) MB)"
+        $wb     = $xl.Workbooks.Open($tmpMerge, 0, $true)
         # Force manual calc AFTER open -- Application.Calculation is a no-op when no workbook is loaded,
         # so without this the workbook may keep its saved Automatic mode and recalc on every Value2 read.
         try { $xl.Calculation = -4135 } catch {}
@@ -514,6 +525,7 @@ foreach ($file in $files) {
         $totalSkipped++
     } finally {
         if ($null -ne $wb) { $wb.Close($false); ReleaseCom $wb; $wb = $null }
+        if ($null -ne $tmpMerge) { Remove-Item -LiteralPath $tmpMerge -Force -ErrorAction SilentlyContinue; $tmpMerge = $null }
     }
     [System.GC]::Collect()
     [System.GC]::WaitForPendingFinalizers()
