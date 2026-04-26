@@ -99,8 +99,24 @@ foreach ($file in $files) {
             $firstRow = $used.Row
             $ncols    = $used.Columns.Count
             $firstCol = $used.Column
+            $nrowsTot = $used.Rows.Count
+            $scanTo   = [Math]::Min(5, $nrowsTot)
+
+            # Pick the row with the most non-null cells as the header row
+            # (handles files with a title row above the real headers)
+            $bestRow   = $firstRow
+            $bestCount = -1
+            for ($tr = 0; $tr -lt $scanTo; $tr++) {
+                $count = 0
+                for ($c = 0; $c -lt $ncols; $c++) {
+                    $v = $ws.Cells($firstRow + $tr, $firstCol + $c).Value2
+                    if ($null -ne $v -and "$v".Trim() -ne '') { $count++ }
+                }
+                if ($count -gt $bestCount) { $bestCount = $count; $bestRow = $firstRow + $tr }
+            }
+
             for ($c = 0; $c -lt $ncols; $c++) {
-                $v = $ws.Cells($firstRow, $firstCol + $c).Value2
+                $v = $ws.Cells($bestRow, $firstCol + $c).Value2
                 if ($null -ne $v) {
                     $name = $v.ToString().Trim()
                     $key  = $name.ToLower()
