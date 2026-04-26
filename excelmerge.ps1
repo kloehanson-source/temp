@@ -46,6 +46,8 @@ $xl.Visible        = $false
 $xl.DisplayAlerts  = $false
 $xl.ScreenUpdating = $false
 $xl.EnableEvents   = $false
+$xl.AskToUpdateLinks = $false
+try { $xl.AutomationSecurity = 3 } catch {}   # msoAutomationSecurityForceDisable
 try { $xl.Calculation = -4135 } catch {}   # xlCalculationManual - optional optimisation
 
 function ReleaseCom($o) {
@@ -87,7 +89,7 @@ $colToSheets = @{}   # lower col -> hashtable of lower sheet names it appeared i
 foreach ($file in $files) {
     $wb = $null
     try {
-        $wb = $xl.Workbooks.Open($file.FullName, 0, $true)
+        $wb = $xl.Workbooks.Open($file.FullName, 0, $true, [Type]::Missing, [Type]::Missing, [Type]::Missing, $true, [Type]::Missing, [Type]::Missing, [Type]::Missing, $false)
         $sheets = $wb.Worksheets
         foreach ($ws in $sheets) {
             $shName = $ws.Name
@@ -334,7 +336,7 @@ foreach ($file in $files) {
     Write-Host "  [ ] $fname"
 
     try {
-        $wb     = $xl.Workbooks.Open($file.FullName, 0, $true)
+        $wb     = $xl.Workbooks.Open($file.FullName, 0, $true, [Type]::Missing, [Type]::Missing, [Type]::Missing, $true, [Type]::Missing, [Type]::Missing, [Type]::Missing, $false)
         $sheets = $wb.Worksheets
 
         foreach ($ws in $sheets) {
