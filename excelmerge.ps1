@@ -36,19 +36,24 @@ foreach ($f in $files) {
 # ---------------------------------------------------------------------------
 # Start Excel
 # ---------------------------------------------------------------------------
-try {
-    $xl = New-Object -ComObject Excel.Application
-} catch {
-    Write-Host "`nERROR: Could not start Excel. Is Microsoft Excel installed?" -ForegroundColor Red
-    exit 1
+function Start-Excel {
+    try {
+        $x = New-Object -ComObject Excel.Application
+    } catch {
+        Write-Host "`nERROR: Could not start Excel. Is Microsoft Excel installed?" -ForegroundColor Red
+        exit 1
+    }
+    $x.Visible          = $false
+    $x.DisplayAlerts    = $false
+    $x.ScreenUpdating   = $false
+    $x.EnableEvents     = $false
+    $x.AskToUpdateLinks = $false
+    try { $x.AutomationSecurity = 3 } catch {}   # msoAutomationSecurityForceDisable
+    try { $x.Calculation = -4135 } catch {}      # xlCalculationManual
+    return $x
 }
-$xl.Visible        = $false
-$xl.DisplayAlerts  = $false
-$xl.ScreenUpdating = $false
-$xl.EnableEvents   = $false
-$xl.AskToUpdateLinks = $false
-try { $xl.AutomationSecurity = 3 } catch {}   # msoAutomationSecurityForceDisable
-try { $xl.Calculation = -4135 } catch {}   # xlCalculationManual - optional optimisation
+
+$xl = Start-Excel
 
 function ReleaseCom($o) {
     if ($null -ne $o) {
@@ -489,6 +494,15 @@ foreach ($file in $files) {
     [System.GC]::Collect()
     [System.GC]::WaitForPendingFinalizers()
     [System.GC]::Collect()
+
+    # Restart Excel between files to free its internal memory.
+    # Without this, large files exhaust 32-bit Excel's address space and
+    # subsequent Value2 calls return $null silently.
+    $xl.Quit()
+    ReleaseCom $xl
+    [System.GC]::Collect()
+    [System.GC]::WaitForPendingFinalizers()
+    $xl = Start-Excel
 }
 
 # ---------------------------------------------------------------------------
