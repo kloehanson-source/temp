@@ -232,13 +232,21 @@ while ($true) {
     }
     $ci    = $cn - 1
     $cname = $included[$ci]
-    $vr    = Read-Host "Enter value(s) to keep in column '$cname' (comma-separated, partial match OK)"
+    $vr = Read-Host "Enter value(s) to keep in column '$cname' (comma-separated; wrap in `"quotes`" for exact match)"
     if ([string]::IsNullOrWhiteSpace($vr)) {
         Write-Host "No values entered - skipping." -ForegroundColor Yellow; continue
     }
-    $fv = @($vr.Split(',') | ForEach-Object { $_.Trim().ToLower() } | Where-Object { $_ -ne '' })
+    $fv = @($vr.Split(',') | ForEach-Object {
+        $tok = $_.Trim()
+        if ($tok.Length -ge 2 -and $tok[0] -eq '"' -and $tok[-1] -eq '"') {
+            @{ V = $tok.Substring(1, $tok.Length - 2).ToLower(); E = $true }
+        } else {
+            @{ V = $tok.ToLower(); E = $false }
+        }
+    } | Where-Object { $_.V -ne '' })
     $filters.Add(@{ Idx = $ci; Vals = $fv })
-    Write-Host "  Filter added: '$cname' contains any of [$($fv -join ', ')]"
+    $fvDesc = ($fv | ForEach-Object { if ($_.E) { '="' + $_.V + '"' } else { '~' + $_.V } }) -join ', '
+    Write-Host "  Filter added: '$cname' matches any of [$fvDesc]  (= exact, ~ partial)"
     if ($filters.Count -ge 2) {
         Write-Host ("  NOTE: all {0} filters must be true on the SAME ROW (AND logic)." -f $filters.Count) `
             -ForegroundColor Cyan
@@ -360,7 +368,11 @@ foreach ($file in $files) {
                     $f   = $filters[$fi]
                     $s   = if ($null -ne $row[$f.Idx]) { $row[$f.Idx].ToString().ToLower() } else { '' }
                     $hit = $false
-                    foreach ($v in $f.Vals) { if ($s.Contains($v)) { $hit = $true; break } }
+                    foreach ($v in $f.Vals) {
+                        if (($v.E -and $s -eq $v.V) -or (-not $v.E -and $s.Contains($v.V))) {
+                            $hit = $true; break
+                        }
+                    }
                     if ($hit)      { $filterHits[$fi]++ }
                     if (-not $hit) { $pass = $false }
                 }
@@ -438,8 +450,9 @@ foreach ($file in $files) {
 for ($fi = 0; $fi -lt $filters.Count; $fi++) {
     if ($filterHits[$fi] -eq 0) {
         $f = $filters[$fi]
-        Write-Host ("WARNING: filter on '{0}' for value(s) [{1}] matched zero rows across all files." `
-            -f $included[$f.Idx], ($f.Vals -join "', '")) -ForegroundColor Yellow
+        $fDesc = ($f.Vals | ForEach-Object { if ($_.E) { '="' + $_.V + '"' } else { '~' + $_.V } }) -join ', '
+        Write-Host ("WARNING: filter on '{0}' for value(s) [$fDesc] matched zero rows across all files." `
+            -f $included[$f.Idx]) -ForegroundColor Yellow
     }
 }
 
@@ -454,8 +467,9 @@ if ($totalRows -eq 0 -and $filters.Count -gt 1) {
         Write-Host "  Each filter's individual match count:" -ForegroundColor Yellow
         for ($fi = 0; $fi -lt $filters.Count; $fi++) {
             $f = $filters[$fi]
-            Write-Host ("    Filter $($fi+1) -- '{0}' contains [{1}]: {2:N0} rows" `
-                -f $included[$f.Idx], ($f.Vals -join "', '"), $filterHits[$fi]) -ForegroundColor Yellow
+            $fDesc = ($f.Vals | ForEach-Object { if ($_.E) { '="' + $_.V + '"' } else { '~' + $_.V } }) -join ', '
+            Write-Host ("    Filter $($fi+1) -- '{0}' matches [$fDesc]: {1:N0} rows" `
+                -f $included[$f.Idx], $filterHits[$fi]) -ForegroundColor Yellow
         }
         Write-Host "  If both counts look right, those values may not co-exist on any single row." `
             -ForegroundColor Yellow
