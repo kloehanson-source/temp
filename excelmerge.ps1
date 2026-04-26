@@ -408,115 +408,94 @@ foreach ($file in $files) {
                 ReleaseCom $used; ReleaseCom $ws; continue
             }
 
-            # Read data in chunks of CHUNK rows so no single Value2 call marshals the whole sheet
-            $CHUNK        = 100
+            # Per-cell read pattern (mirrors the scan phase). Multi-cell Value2 calls past the
+            # first one have been observed to hang on certain files (likely formula recalc or
+            # COM marshaling state). Reading mapped cells one at a time avoids that entirely.
             $firstDataRow = $absFirst + $headerRow
             # Use Find to locate the actual last non-empty row (UsedRange.Rows.Count is often
-            # inflated by phantom formatting; reading those blank rows can trigger recalc hangs)
+            # inflated by phantom formatting)
             $findCell = $used.Find("*", $ws.Cells($absFirst, $absFirstCol), -4163, 2, 1, 2, $false, $false, $false)
             $lastRow  = if ($null -ne $findCell) { $findCell.Row } else { $absFirst - 1 }
             ReleaseCom $findCell
-            $lastCol      = $absFirstCol + $ncols - 1
-            $sheetRows    = 0
-            $emptyChunkStreak = 0
+            $sheetRows = 0
 
-            $chunkStart = $firstDataRow
-            while ($chunkStart -le $lastRow) {
-                $chunkEnd   = [Math]::Min($chunkStart + $CHUNK - 1, $lastRow)
-                $chunkRange = $ws.Range($ws.Cells($chunkStart, $absFirstCol), $ws.Cells($chunkEnd, $lastCol))
-                $xl.Calculation = -4135   # re-assert manual calc; Excel may auto-switch on open
-                $chunk      = $chunkRange.Value2
-                ReleaseCom $chunkRange
-                $chunkIsArr = $chunk -is [System.Array]
-                $chunkIs2D  = $chunkIsArr -and ($chunk.Rank -eq 2)
-                $chunkRows  = $chunkEnd - $chunkStart + 1
-                $chunkKept  = 0
+            for ($r = $firstDataRow; $r -le $lastRow; $r++) {
+                $row   = New-Object object[] $nOut
+                $empty = $true
 
-                for ($ri = 1; $ri -le $chunkRows; $ri++) {
-                    $row   = New-Object object[] $nOut
-                    $empty = $true
-
-                    foreach ($fc in $shMap.Keys) {
-                        $v = if ($chunkIs2D) { $chunk[$ri, $fc] } elseif ($chunkIsArr) { $chunk[$fc - 1] } else { $chunk }
-                        $v = CoerceVal $v
-                        $row[$shMap[$fc]] = $v
-                        if ($null -ne $v -and "$v" -ne '') { $empty = $false }
+                foreach ($fc in $shMap.Keys) {
+                    $v = $ws.Cells($r, $absFirstCol + $fc - 1).Value2
+                    $v = CoerceVal $v
+                    $row[$shMap[$fc]] = $v
+                    if ($null -ne $v -and "$v" -ne '') { $empty = $false }
+                }
+                if ($empty) {
+                    if (($r % 100) -eq 0) {
+                        Write-Host ("`r      '$sname': row {0:N0}/{1:N0}, kept {2:N0}..." -f ($r - $absFirst + 1), ($lastRow - $absFirst + 1), $sheetRows) -NoNewline
                     }
-                    if ($empty) { continue }
-                    $chunkKept++
+                    continue
+                }
 
-                    $pass = $true
-                    for ($fi = 0; $fi -lt $filters.Count; $fi++) {
-                        $f   = $filters[$fi]
-                        $s   = if ($null -ne $row[$f.Idx]) { $row[$f.Idx].ToString().ToLower() } else { '' }
-                        $hit = $false
-                        foreach ($v in $f.Vals) {
-                            if (($v.E -and $s -eq $v.V) -or (-not $v.E -and $s.Contains($v.V))) {
-                                $hit = $true; break
-                            }
+                $pass = $true
+                for ($fi = 0; $fi -lt $filters.Count; $fi++) {
+                    $f   = $filters[$fi]
+                    $s   = if ($null -ne $row[$f.Idx]) { $row[$f.Idx].ToString().ToLower() } else { '' }
+                    $hit = $false
+                    foreach ($v in $f.Vals) {
+                        if (($v.E -and $s -eq $v.V) -or (-not $v.E -and $s.Contains($v.V))) {
+                            $hit = $true; break
                         }
-                        if ($hit)      { $filterHits[$fi]++ }
-                        if (-not $hit) { $pass = $false }
                     }
-                    if (-not $pass) { continue }
+                    if ($hit)      { $filterHits[$fi]++ }
+                    if (-not $hit) { $pass = $false }
+                }
+                if (-not $pass) { continue }
 
-                    $row[$srcIdx] = $fname
+                $row[$srcIdx] = $fname
 
-                    # Roll over to a new sheet if Excel row limit reached
-                    if ($curDataRows -ge $MAX_DATA_ROWS) {
-                        $curSW.Write('</sheetData></worksheet>')
-                        $curSW.Flush(); $curSW.Close(); $curSW.Dispose()
-                        $curSheetNum++
-                        $curSW = Open-SheetWriter $curSheetNum
-                        $sheetNames.Add("Consolidated ($curSheetNum)")
-                        $outRow = 2
-                        $curDataRows = 0
-                    }
+                # Roll over to a new sheet if Excel row limit reached
+                if ($curDataRows -ge $MAX_DATA_ROWS) {
+                    $curSW.Write('</sheetData></worksheet>')
+                    $curSW.Flush(); $curSW.Close(); $curSW.Dispose()
+                    $curSheetNum++
+                    $curSW = Open-SheetWriter $curSheetNum
+                    $sheetNames.Add("Consolidated ($curSheetNum)")
+                    $outRow = 2
+                    $curDataRows = 0
+                }
 
-                    # Stream row to Open XML sheet
-                    $curSW.Write('<row r="' + $outRow + '">')
-                    for ($c = 0; $c -lt $nOut; $c++) {
-                        $v = $row[$c]
-                        if ($null -eq $v) { continue }
-                        $ref = (ColumnLetter ($c + 1)) + $outRow
-                        if ($v -is [string]) {
-                            $curSW.Write('<c r="' + $ref + '" t="inlineStr"><is><t>' + (XmlEsc $v) + '</t></is></c>')
-                        } elseif ($v -is [bool]) {
-                            $curSW.Write('<c r="' + $ref + '" t="b"><v>' + (if ($v) {'1'} else {'0'}) + '</v></c>')
-                        } elseif ($v -is [long]) {
-                            if ([math]::Abs($v) -ge 1000000000) {
-                                # 10+ digit integer: store as text to prevent scientific notation
-                                $curSW.Write('<c r="' + $ref + '" t="inlineStr"><is><t>' + $v.ToString() + '</t></is></c>')
-                            } else {
-                                $curSW.Write('<c r="' + $ref + '" t="n"><v>' + $v.ToString() + '</v></c>')
-                            }
+                # Stream row to Open XML sheet
+                $curSW.Write('<row r="' + $outRow + '">')
+                for ($c = 0; $c -lt $nOut; $c++) {
+                    $v = $row[$c]
+                    if ($null -eq $v) { continue }
+                    $ref = (ColumnLetter ($c + 1)) + $outRow
+                    if ($v -is [string]) {
+                        $curSW.Write('<c r="' + $ref + '" t="inlineStr"><is><t>' + (XmlEsc $v) + '</t></is></c>')
+                    } elseif ($v -is [bool]) {
+                        $curSW.Write('<c r="' + $ref + '" t="b"><v>' + (if ($v) {'1'} else {'0'}) + '</v></c>')
+                    } elseif ($v -is [long]) {
+                        if ([math]::Abs($v) -ge 1000000000) {
+                            # 10+ digit integer: store as text to prevent scientific notation
+                            $curSW.Write('<c r="' + $ref + '" t="inlineStr"><is><t>' + $v.ToString() + '</t></is></c>')
                         } else {
-                            # Double, Int32, etc. - numeric cell, invariant decimal format
-                            $curSW.Write('<c r="' + $ref + '" t="n"><v>' + $v.ToString('G15', $InvCulture) + '</v></c>')
+                            $curSW.Write('<c r="' + $ref + '" t="n"><v>' + $v.ToString() + '</v></c>')
                         }
+                    } else {
+                        # Double, Int32, etc. - numeric cell, invariant decimal format
+                        $curSW.Write('<c r="' + $ref + '" t="n"><v>' + $v.ToString('G15', $InvCulture) + '</v></c>')
                     }
-                    $curSW.WriteLine('</row>')
-                    $curDataRows++
-                    $outRow++
-                    $totalRows++
-                    $sheetRows++
-                    $fileRows++
                 }
+                $curSW.WriteLine('</row>')
+                $curDataRows++
+                $outRow++
+                $totalRows++
+                $sheetRows++
+                $fileRows++
 
-                $chunk = $null
-
-                # Detect inflated UsedRange: if 5 chunks in a row are entirely empty AND we've already
-                # seen real data, assume the rest of the "used range" is phantom formatting and stop.
-                if ($chunkKept -eq 0) { $emptyChunkStreak++ } else { $emptyChunkStreak = 0 }
-                if ($emptyChunkStreak -ge 5 -and $sheetRows -gt 0) {
-                    Write-Host ("`r      '$sname': stopped at row {0:N0} (rest of range appears empty)" -f $chunkEnd) -ForegroundColor DarkGray
-                    break
+                if (($r % 100) -eq 0) {
+                    Write-Host ("`r      '$sname': row {0:N0}/{1:N0}, kept {2:N0}..." -f ($r - $absFirst + 1), ($lastRow - $absFirst + 1), $sheetRows) -NoNewline
                 }
-
-                Write-Host ("`r      '$sname': scanned through row {0:N0}/{1:N0}, kept {2:N0}..." `
-                    -f ($chunkEnd - $absFirst + 1), $nrows, $sheetRows) -NoNewline
-
-                $chunkStart = $chunkEnd + 1
             }
 
             Write-Host ("`r      '$sname': {0:N0} rows          " -f $sheetRows)
