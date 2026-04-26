@@ -381,6 +381,12 @@ foreach ($file in $files) {
                 }
             }
 
+            Write-Host ("        header row {0}, {1} column(s) mapped" -f $headerRow, $shMap.Count) -ForegroundColor DarkGray
+            if ($shMap.Count -eq 0) {
+                Write-Host "        WARNING: no columns matched — check header spelling in this file." -ForegroundColor Yellow
+                ReleaseCom $used; ReleaseCom $ws; continue
+            }
+
             $sheetRows = 0
             for ($r = ($headerRow + 1); $r -le $nrows; $r++) {
                 $row   = New-Object object[] $nOut
