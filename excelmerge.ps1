@@ -419,33 +419,51 @@ foreach ($file in $files) {
                 ReleaseCom $used; ReleaseCom $ws; continue
             }
 
-            # Per-cell read pattern (mirrors the scan phase). Multi-cell Value2 calls past the
-            # first one have been observed to hang on certain files (likely formula recalc or
-            # COM marshaling state). Reading mapped cells one at a time avoids that entirely.
+            # One-row-per-Value2 reads + timing diagnostics. Per-cell was making 20x more COM
+            # calls than needed; whole-sheet bulk reads have hung on the second call. A single
+            # row is a small enough range that it shouldn't trigger whatever causes the bulk hang.
             $firstDataRow = $absFirst + $headerRow
-            # Use Find to locate the actual last non-empty row (UsedRange.Rows.Count is often
-            # inflated by phantom formatting)
+
+            $findSw = [System.Diagnostics.Stopwatch]::StartNew()
+            Write-Host "        Finding last data row..." -NoNewline
             $findCell = $used.Find("*", $ws.Cells($absFirst, $absFirstCol), -4163, 2, 1, 2, $false, $false, $false)
             $lastRow  = if ($null -ne $findCell) { $findCell.Row } else { $absFirst - 1 }
             ReleaseCom $findCell
-            $sheetRows = 0
+            $findSw.Stop()
+            $totalDataRows = $lastRow - $firstDataRow + 1
+            Write-Host (" lastRow=$lastRow ({0} data rows) [Find took {1:N1}s]" -f $totalDataRows, $findSw.Elapsed.TotalSeconds)
+
+            $lastCol     = $absFirstCol + $ncols - 1
+            $sheetRows   = 0
+            $readSw      = [System.Diagnostics.Stopwatch]::StartNew()
 
             for ($r = $firstDataRow; $r -le $lastRow; $r++) {
+                # Read entire data row in one Value2 call
+                $rowRange = $ws.Range($ws.Cells($r, $absFirstCol), $ws.Cells($r, $lastCol))
+                $rowVals  = $rowRange.Value2
+                ReleaseCom $rowRange
+                $rIsArr = $rowVals -is [System.Array]
+                $rIs2D  = $rIsArr -and ($rowVals.Rank -eq 2)
+
                 $row   = New-Object object[] $nOut
                 $empty = $true
-
                 foreach ($fc in $shMap.Keys) {
-                    $v = $ws.Cells($r, $absFirstCol + $fc - 1).Value2
+                    $v = if ($rIs2D) { $rowVals[1, $fc] } elseif ($rIsArr) { $rowVals[$fc - 1] } else { $rowVals }
                     $v = CoerceVal $v
                     $row[$shMap[$fc]] = $v
                     if ($null -ne $v -and "$v" -ne '') { $empty = $false }
                 }
-                if ($empty) {
-                    if (($r % 100) -eq 0) {
-                        Write-Host ("`r      '$sname': row {0:N0}/{1:N0}, kept {2:N0}..." -f ($r - $absFirst + 1), ($lastRow - $absFirst + 1), $sheetRows) -NoNewline
-                    }
-                    continue
+                $rowVals = $null
+
+                $rowsDone = $r - $firstDataRow + 1
+                if (($rowsDone % 25) -eq 0) {
+                    $el   = $readSw.Elapsed.TotalSeconds
+                    $rate = if ($el -gt 0) { $rowsDone / $el } else { 0 }
+                    $eta  = if ($rate -gt 0) { ($totalDataRows - $rowsDone) / $rate } else { 0 }
+                    Write-Host ("`r      '$sname': {0:N0}/{1:N0} kept={2:N0} | {3:N1}s @ {4:N1}r/s, ETA {5:N0}s        " `
+                        -f $rowsDone, $totalDataRows, $sheetRows, $el, $rate, $eta) -NoNewline
                 }
+                if ($empty) { continue }
 
                 $pass = $true
                 for ($fi = 0; $fi -lt $filters.Count; $fi++) {
@@ -503,10 +521,6 @@ foreach ($file in $files) {
                 $totalRows++
                 $sheetRows++
                 $fileRows++
-
-                if (($r % 100) -eq 0) {
-                    Write-Host ("`r      '$sname': row {0:N0}/{1:N0}, kept {2:N0}..." -f ($r - $absFirst + 1), ($lastRow - $absFirst + 1), $sheetRows) -NoNewline
-                }
             }
 
             Write-Host ("`r      '$sname': {0:N0} rows          " -f $sheetRows)
