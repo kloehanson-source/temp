@@ -341,9 +341,24 @@ foreach ($file in $files) {
             $data  = $used.Value2
             $isArr = $data -is [System.Array]
 
+            # Auto-detect header row — handles files with a title row above the real headers
+            $headerRow   = 1
+            $bestMatches = 0
+            $scanTo      = [Math]::Min(5, $nrows)
+            for ($tr = 1; $tr -le $scanTo; $tr++) {
+                $m = 0
+                for ($c = 1; $c -le $ncols; $c++) {
+                    $h = if ($isArr) { $data[$tr, $c] } else { $null }
+                    if ($null -ne $h) {
+                        if ($colMap.ContainsKey($h.ToString().Trim().ToLower())) { $m++ }
+                    }
+                }
+                if ($m -gt $bestMatches) { $bestMatches = $m; $headerRow = $tr }
+            }
+
             $shMap = @{}
             for ($c = 1; $c -le $ncols; $c++) {
-                $h = if ($isArr) { $data[1, $c] } else { $data }
+                $h = if ($isArr) { $data[$headerRow, $c] } else { $data }
                 if ($null -ne $h) {
                     $key = $h.ToString().Trim().ToLower()
                     if ($colMap.ContainsKey($key)) { $shMap[$c] = $colMap[$key] }
@@ -351,7 +366,7 @@ foreach ($file in $files) {
             }
 
             $sheetRows = 0
-            for ($r = 2; $r -le $nrows; $r++) {
+            for ($r = ($headerRow + 1); $r -le $nrows; $r++) {
                 $row   = New-Object object[] $nOut
                 $empty = $true
 
