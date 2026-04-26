@@ -250,20 +250,39 @@ $nOut   = $included.Count
 $srcIdx = $nOut - 1
 
 # ---------------------------------------------------------------------------
-# Create output workbook
+# Create output XLSX via Open XML (bypasses 32-bit COM numeric write issues)
 # ---------------------------------------------------------------------------
 $ts      = Get-Date -Format 'yyyyMMdd_HHmmss'
 $outPath = Join-Path $FolderPath "consolidated_$ts.xlsx"
-$outWb   = $xl.Workbooks.Add()
+$noBom   = New-Object System.Text.UTF8Encoding $false
 
-while ($outWb.Worksheets.Count -gt 1) {
-    $outWb.Worksheets($outWb.Worksheets.Count).Delete()
+$tmpDir = Join-Path $env:TEMP ("xlmerge_" + [System.Guid]::NewGuid().ToString("N"))
+[System.IO.Directory]::CreateDirectory("$tmpDir\_rels")         | Out-Null
+[System.IO.Directory]::CreateDirectory("$tmpDir\xl\_rels")      | Out-Null
+[System.IO.Directory]::CreateDirectory("$tmpDir\xl\worksheets") | Out-Null
+
+$MAX_DATA_ROWS = 1048575   # rows 2..1048576 per sheet (row 1 = header)
+
+$sheetNames  = [System.Collections.Generic.List[string]]::new()
+$curSheetNum = 1
+$curDataRows = 0
+
+function Open-SheetWriter([int]$num) {
+    $p = Join-Path $tmpDir "xl\worksheets\sheet$num.xml"
+    $w = [System.IO.StreamWriter]::new($p, $false, $noBom)
+    $w.WriteLine('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>')
+    $w.Write('<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>')
+    $w.Write('<row r="1">')
+    for ($hc = 0; $hc -lt $nOut; $hc++) {
+        $hRef = (ColumnLetter ($hc + 1)) + '1'
+        $w.Write('<c r="' + $hRef + '" s="1" t="inlineStr"><is><t>' + (XmlEsc $included[$hc]) + '</t></is></c>')
+    }
+    $w.WriteLine('</row>')
+    return $w
 }
-$outWs      = $outWb.Worksheets(1)
-$outWs.Name = "Consolidated"
 
-for ($c = 0; $c -lt $nOut; $c++) { $outWs.Cells(1, $c + 1).Value2 = $included[$c] }
-$outWs.Rows(1).Font.Bold = $true
+$curSW = Open-SheetWriter 1
+$sheetNames.Add("Consolidated")
 
 # ---------------------------------------------------------------------------
 # Process files
@@ -344,18 +363,41 @@ foreach ($file in $files) {
 
                 $row[$srcIdx] = $fname
 
-                # Write row cell-by-cell using local typed variables.
-                # 32-bit PS COM cannot marshal Int64 or boxed values from object[];
-                # assigning via a local variable preserves the .NET type so COM
-                # marshals correctly.  Int64 -> Double at write time (Excel stores
-                # all numbers as Double anyway; precision is already capped by
-                # whatever the source file held).
+                # Roll over to a new sheet if Excel row limit reached
+                if ($curDataRows -ge $MAX_DATA_ROWS) {
+                    $curSW.Write('</sheetData></worksheet>')
+                    $curSW.Flush(); $curSW.Close(); $curSW.Dispose()
+                    $curSheetNum++
+                    $curSW = Open-SheetWriter $curSheetNum
+                    $sheetNames.Add("Consolidated ($curSheetNum)")
+                    $outRow = 2
+                    $curDataRows = 0
+                }
+
+                # Stream row to Open XML sheet
+                $curSW.Write('<row r="' + $outRow + '">')
                 for ($c = 0; $c -lt $nOut; $c++) {
                     $v = $row[$c]
                     if ($null -eq $v) { continue }
-                    if ($v -is [long]) { $v = [double]$v }
-                    $outWs.Cells($outRow, $c + 1).Value2 = $v
+                    $ref = (ColumnLetter ($c + 1)) + $outRow
+                    if ($v -is [string]) {
+                        $curSW.Write('<c r="' + $ref + '" t="inlineStr"><is><t>' + (XmlEsc $v) + '</t></is></c>')
+                    } elseif ($v -is [bool]) {
+                        $curSW.Write('<c r="' + $ref + '" t="b"><v>' + (if ($v) {'1'} else {'0'}) + '</v></c>')
+                    } elseif ($v -is [long]) {
+                        if ([math]::Abs($v) -ge 1000000000) {
+                            # 10+ digit integer: store as text to prevent scientific notation
+                            $curSW.Write('<c r="' + $ref + '" t="inlineStr"><is><t>' + $v.ToString() + '</t></is></c>')
+                        } else {
+                            $curSW.Write('<c r="' + $ref + '" t="n"><v>' + $v.ToString() + '</v></c>')
+                        }
+                    } else {
+                        # Double, Int32, etc. - numeric cell, invariant decimal format
+                        $curSW.Write('<c r="' + $ref + '" t="n"><v>' + $v.ToString('G15', $InvCulture) + '</v></c>')
+                    }
                 }
+                $curSW.WriteLine('</row>')
+                $curDataRows++
                 $outRow++
                 $totalRows++
                 $sheetRows++
@@ -373,8 +415,8 @@ foreach ($file in $files) {
         }
 
         ReleaseCom $sheets
-        $sw = if ($sheetsProcessed -eq 1) { "sheet" } else { "sheets" }
-        Write-Host ("  [+] {0} - {1} {2}, {3:N0} rows total" -f $fname, $sheetsProcessed, $sw, $fileRows)
+        $shLabel = if ($sheetsProcessed -eq 1) { "sheet" } else { "sheets" }
+        Write-Host ("  [+] {0} - {1} {2}, {3:N0} rows total" -f $fname, $sheetsProcessed, $shLabel, $fileRows)
         $totalOk++
 
     } catch {
@@ -396,18 +438,104 @@ for ($fi = 0; $fi -lt $filters.Count; $fi++) {
     }
 }
 
-Write-Host ("`n{0:N0} rows written to output workbook." -f $totalRows)
-Write-Host "Saving..." -NoNewline
-$outWb.SaveAs($outPath, 51)   # 51 = xlOpenXMLWorkbook (.xlsx)
-$outWb.Close($false)
-ReleaseCom $outWs
-ReleaseCom $outWb
-Write-Host " done."
-
 $xl.Quit()
 ReleaseCom $xl
 [System.GC]::Collect()
 [System.GC]::WaitForPendingFinalizers()
+
+Write-Host ("`n{0:N0} rows written." -f $totalRows)
+Write-Host "Building output file..." -NoNewline
+
+# Close the last (or only) sheet writer
+$curSW.Write('</sheetData></worksheet>')
+$curSW.Flush(); $curSW.Close(); $curSW.Dispose()
+
+# OOXML namespace constants
+$nsWs  = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet'
+$nsSty = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles'
+$nsOD  = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument'
+$ctWs  = 'application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml'
+$ctWb  = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml'
+$ctSty = 'application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml'
+$ctRel = 'application/vnd.openxmlformats-package.relationships+xml'
+$nsPkg = 'http://schemas.openxmlformats.org/package/2006/relationships'
+
+# Build per-sheet XML fragments
+$ctOverrides = ''
+$sheetElems  = ''
+$wsRels      = ''
+for ($i = 1; $i -le $sheetNames.Count; $i++) {
+    $sn = $sheetNames[$i - 1]
+    $ctOverrides += '  <Override PartName="/xl/worksheets/sheet' + $i + '.xml" ContentType="' + $ctWs + '"/>' + "`n"
+    $sheetElems  += '    <sheet name="' + (XmlEsc $sn) + '" sheetId="' + $i + '" r:id="rId' + $i + '"/>' + "`n"
+    $wsRels      += '  <Relationship Id="rId' + $i + '" Type="' + $nsWs + '" Target="worksheets/sheet' + $i + '.xml"/>' + "`n"
+}
+$styleRId = 'rId' + ($sheetNames.Count + 1)
+$wsRels  += '  <Relationship Id="' + $styleRId + '" Type="' + $nsSty + '" Target="styles.xml"/>' + "`n"
+
+$xmlFiles = @{
+    '_rels\.rels' = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' + "`n" +
+        '<Relationships xmlns="' + $nsPkg + '">' + "`n" +
+        '  <Relationship Id="rId1" Type="' + $nsOD + '" Target="xl/workbook.xml"/>' + "`n" +
+        '</Relationships>')
+
+    'xl\workbook.xml' = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' + "`n" +
+        '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"' + "`n" +
+        '          xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">' + "`n" +
+        '  <sheets>' + "`n" + $sheetElems + '  </sheets>' + "`n" +
+        '</workbook>')
+
+    'xl\_rels\workbook.xml.rels' = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' + "`n" +
+        '<Relationships xmlns="' + $nsPkg + '">' + "`n" +
+        $wsRels +
+        '</Relationships>')
+
+    'xl\styles.xml' = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' + "`n" +
+        '<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">' + "`n" +
+        '  <fonts count="2">' + "`n" +
+        '    <font><sz val="11"/><name val="Calibri"/></font>' + "`n" +
+        '    <font><b/><sz val="11"/><name val="Calibri"/></font>' + "`n" +
+        '  </fonts>' + "`n" +
+        '  <fills count="2">' + "`n" +
+        '    <fill><patternFill patternType="none"/></fill>' + "`n" +
+        '    <fill><patternFill patternType="gray125"/></fill>' + "`n" +
+        '  </fills>' + "`n" +
+        '  <borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>' + "`n" +
+        '  <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>' + "`n" +
+        '  <cellXfs count="2">' + "`n" +
+        '    <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>' + "`n" +
+        '    <xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/>' + "`n" +
+        '  </cellXfs>' + "`n" +
+        '</styleSheet>')
+}
+
+foreach ($rel in $xmlFiles.Keys) {
+    [System.IO.File]::WriteAllText((Join-Path $tmpDir $rel), $xmlFiles[$rel], $noBom)
+}
+
+$ctXml = (
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' + "`n" +
+    '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">' + "`n" +
+    '  <Default Extension="rels" ContentType="' + $ctRel + '"/>' + "`n" +
+    '  <Default Extension="xml" ContentType="application/xml"/>' + "`n" +
+    '  <Override PartName="/xl/workbook.xml" ContentType="' + $ctWb + '"/>' + "`n" +
+    $ctOverrides +
+    '  <Override PartName="/xl/styles.xml" ContentType="' + $ctSty + '"/>' + "`n" +
+    '</Types>')
+# Use IO.Path.Combine so brackets in filename are treated as literals
+[System.IO.File]::WriteAllText(
+    [System.IO.Path]::Combine($tmpDir, '[Content_Types].xml'), $ctXml, $noBom)
+
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+if (Test-Path $outPath) { Remove-Item $outPath -Force }
+[System.IO.Compression.ZipFile]::CreateFromDirectory($tmpDir, $outPath)
+[System.IO.Directory]::Delete($tmpDir, $true)
+
+Write-Host " done."
 
 # ---------------------------------------------------------------------------
 # Summary
