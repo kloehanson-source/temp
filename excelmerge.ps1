@@ -140,6 +140,9 @@ foreach ($file in $files) {
     } finally {
         if ($null -ne $wb) { $wb.Close($false); ReleaseCom $wb; $wb = $null }
     }
+    [System.GC]::Collect()
+    [System.GC]::WaitForPendingFinalizers()
+    [System.GC]::Collect()
 }
 
 if ($seenSheets.Count -eq 0) {
@@ -383,7 +386,8 @@ foreach ($file in $files) {
                 }
             }
 
-            Write-Host ("        header row {0}, {1} column(s) mapped" -f $headerRow, $shMap.Count) -ForegroundColor DarkGray
+            $dataTypeName = if ($null -eq $data) { '<null>' } else { $data.GetType().Name }
+            Write-Host ("        header row {0}, {1} column(s) mapped (isArr={2}, type={3})" -f $headerRow, $shMap.Count, $isArr, $dataTypeName) -ForegroundColor DarkGray
             if ($shMap.Count -eq 0) {
                 Write-Host "        WARNING: no columns matched - check header spelling in this file." -ForegroundColor Yellow
                 ReleaseCom $used; ReleaseCom $ws; continue
@@ -480,7 +484,11 @@ foreach ($file in $files) {
         $totalSkipped++
     } finally {
         if ($null -ne $wb) { $wb.Close($false); ReleaseCom $wb; $wb = $null }
+        $data = $null
     }
+    [System.GC]::Collect()
+    [System.GC]::WaitForPendingFinalizers()
+    [System.GC]::Collect()
 }
 
 # ---------------------------------------------------------------------------
