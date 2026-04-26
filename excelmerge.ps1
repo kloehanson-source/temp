@@ -409,9 +409,13 @@ foreach ($file in $files) {
             }
 
             # Read data in chunks of CHUNK rows so no single Value2 call marshals the whole sheet
-            $CHUNK        = 500
+            $CHUNK        = 100
             $firstDataRow = $absFirst + $headerRow
-            $lastRow      = $absFirst + $nrows - 1
+            # Use Find to locate the actual last non-empty row (UsedRange.Rows.Count is often
+            # inflated by phantom formatting; reading those blank rows can trigger recalc hangs)
+            $findCell = $used.Find("*", $ws.Cells($absFirst, $absFirstCol), -4163, 2, 1, 2, $false, $false, $false)
+            $lastRow  = if ($null -ne $findCell) { $findCell.Row } else { $absFirst - 1 }
+            ReleaseCom $findCell
             $lastCol      = $absFirstCol + $ncols - 1
             $sheetRows    = 0
             $emptyChunkStreak = 0
@@ -420,6 +424,7 @@ foreach ($file in $files) {
             while ($chunkStart -le $lastRow) {
                 $chunkEnd   = [Math]::Min($chunkStart + $CHUNK - 1, $lastRow)
                 $chunkRange = $ws.Range($ws.Cells($chunkStart, $absFirstCol), $ws.Cells($chunkEnd, $lastCol))
+                $xl.Calculation = -4135   # re-assert manual calc; Excel may auto-switch on open
                 $chunk      = $chunkRange.Value2
                 ReleaseCom $chunkRange
                 $chunkIsArr = $chunk -is [System.Array]
